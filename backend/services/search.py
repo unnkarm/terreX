@@ -39,17 +39,19 @@ def _hits_to_results(hits, session, w_semantic_only=False):
         semantic_score = float(h.score)
         final_score, breakdown = compute_final_score(
             semantic_score=semantic_score,
-            quality_score=tile.quality_score or 0.5,
-            geo_relevance=1.0,   # no AOI centroid distance requested -> neutral
-            metadata_match=1.0,  # filters already applied at query time
+            quality_score=tile.quality_score or 0.8,
+            geo_relevance=1.0,
+            metadata_match=1.0,
             change_confidence=None,
+            is_placeholder=tile.embedding_is_placeholder,
         )
         results.append({
             "tile_id": tile.tile_id,
             "scene_id": tile.scene_id,
             "lon": tile.lon,
             "lat": tile.lat,
-            "similarity_score": semantic_score,
+            "similarity_score": breakdown.get("semantic", semantic_score),
+            "raw_similarity": semantic_score,
             "final_score": final_score,
             "score_breakdown": breakdown,
             "acquisition_date": tile.acquisition_date.isoformat() if tile.acquisition_date else None,

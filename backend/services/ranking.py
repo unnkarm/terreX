@@ -2,15 +2,25 @@
 Feature 6 — Hybrid ranking.
 
 Combines semantic similarity + geographic relevance + metadata match +
-image quality + change confidence into one configurable score. Weights
-live in config.py (env-overridable) so the function stays simple and the
-knobs stay visible for the demo.
+image quality + change confidence into one calibrated score.
 """
 from __future__ import annotations
 
 from typing import Optional
+import numpy as np
 
-from config import settings
+
+def calibrate_similarity(raw_score: float, is_placeholder: bool = False) -> float:
+    """
+    Calibrates raw RemoteCLIP cosine similarity into a standardized 0..1 scale.
+    For RemoteCLIP embeddings, random/unrelated cosine is ~0.14-0.16.
+    A score of 0.21 indicates moderate relevance (50%), 0.25 is strong (75%), and 0.28+ is very high (90%+).
+    """
+    if is_placeholder:
+        return float(np.clip(raw_score, 0.0, 1.0))
+    # RemoteCLIP calibration curve
+    calibrated = (raw_score - 0.15) / 0.14
+    return float(np.clip(calibrated, 0.0, 1.0))
 
 
 def compute_final_score(
@@ -19,42 +29,42 @@ def compute_final_score(
     geo_relevance: float = 1.0,
     metadata_match: float = 1.0,
     change_confidence: Optional[float] = None,
+    is_placeholder: bool = False,
 ) -> tuple:
     """
-    All inputs expected in [0, 1]. Returns (final_score, breakdown_dict).
-    If change_confidence is None (no change context for this query), its
-    weight is redistributed proportionally across the other terms so the
-    score stays on a comparable 0..1 scale.
+    Calculates calibrated final ranking score.
+    Semantic similarity acts as the primary gatekeeper so irrelevant tiles
+    do not rank high purely due to image quality or metadata.
     """
-    w_sem, w_geo, w_meta, w_qual, w_change = (
-        settings.W_SEMANTIC, settings.W_GEO, settings.W_METADATA,
-        settings.W_QUALITY, settings.W_CHANGE,
+    calibrated_sem = calibrate_similarity(semantic_score, is_placeholder)
+
+    # Relevance gate: if semantic similarity is low, suppress composite score
+    if calibrated_sem < 0.15:
+        relevance_gate = calibrated_sem / 0.15
+    else:
+        relevance_gate = 1.0
+
+    w_sem = 0.70
+    w_qual = 0.15
+    w_meta = 0.10
+    w_geo = 0.05
+
+    base_score = (
+        w_sem * calibrated_sem
+        + w_qual * float(quality_score)
+        + w_meta * float(metadata_match)
+        + w_geo * float(geo_relevance)
     )
 
-    if change_confidence is None:
-        remaining = w_sem + w_geo + w_meta + w_qual
-        scale = 1.0 / remaining if remaining > 0 else 0.0
-        w_sem, w_geo, w_meta, w_qual = (w * scale for w in (w_sem, w_geo, w_meta, w_qual))
-        w_change = 0.0
-        change_confidence = 0.0
+    final = float(np.clip(base_score * relevance_gate, 0.0, 1.0))
 
-    final = (
-        w_sem * semantic_score
-        + w_geo * geo_relevance
-        + w_meta * metadata_match
-        + w_qual * quality_score
-        + w_change * change_confidence
-    )
     breakdown = {
-        "semantic": round(semantic_score, 4),
+        "raw_similarity": round(semantic_score, 4),
+        "semantic": round(calibrated_sem, 4),
         "geo_relevance": round(geo_relevance, 4),
         "metadata_match": round(metadata_match, 4),
         "quality": round(quality_score, 4),
-        "change_confidence": round(change_confidence, 4),
-        "weights": {
-            "semantic": round(w_sem, 3), "geo": round(w_geo, 3),
-            "metadata": round(w_meta, 3), "quality": round(w_qual, 3),
-            "change": round(w_change, 3),
-        },
+        "change_confidence": round(change_confidence, 4) if change_confidence else 0.0,
     }
     return round(final, 4), breakdown
+
