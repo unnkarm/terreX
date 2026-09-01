@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="earthRadial" cx="38%" cy="32%" r="68%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="45%" stop-color="#1d4ed8" />
+      <stop offset="90%" stop-color="#1e3a8a" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </radialGradient>
+    <linearGradient id="radarScanCone" x1="146" y1="48" x2="98" y2="95" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.95" />
+      <stop offset="65%" stop-color="#0ea5e9" stop-opacity="0.65" />
+      <stop offset="100%" stop-color="#0284c7" stop-opacity="0.35" />
+    </linearGradient>
+    <linearGradient id="blueOrbitRing" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00d2ff" />
+      <stop offset="100%" stop-color="#0066ff" />
+    </linearGradient>
+  </defs>
+  <path d="M 46 102 C 40 58, 122 36, 156 78 C 172 98, 152 134, 102 144 C 72 150, 48 134, 46 102 Z" stroke="#ffffff" stroke-width="7" stroke-linecap="round" fill="none" />
+  <path d="M 48 116 C 52 144, 98 154, 142 126 C 170 108, 178 84, 164 70" stroke="url(#blueOrbitRing)" stroke-width="7.5" stroke-linecap="round" fill="none" />
+  <circle cx="98" cy="95" r="46" fill="url(#earthRadial)" />
+  <g fill="#22c55e">
+    <path d="M 80 70 Q 88 64 98 66 Q 106 70 102 80 Q 94 84 86 80 Q 78 78 80 70 Z" />
+    <path d="M 74 74 Q 82 76 80 86 Q 72 84 74 74 Z" />
+    <path d="M 86 86 Q 94 90 92 104 Q 96 118 88 128 Q 82 124 84 108 Q 80 96 86 86 Z" />
+    <path d="M 120 70 Q 130 66 134 76 Q 128 84 122 82 Z" />
+    <path d="M 124 86 Q 136 92 132 110 Q 122 116 120 100 Q 120 90 124 86 Z" />
+  </g>
+  <circle cx="98" cy="95" r="46" stroke="rgba(255, 255, 255, 0.45)" stroke-width="2" fill="none" />
+  <polygon points="146,48 98,80 134,104" fill="url(#radarScanCone)" />
+  <g transform="translate(146, 48) rotate(-42)">
+    <rect x="-30" y="-8" width="18" height="16" rx="2" fill="#ffffff" stroke="#000000" stroke-width="1.5" />
+    <line x1="-21" y1="-8" x2="-21" y2="8" stroke="#000000" stroke-width="1" />
+    <line x1="-30" y1="0" x2="-12" y2="0" stroke="#000000" stroke-width="1" />
+    <line x1="-12" y1="0" x2="-8" y2="0" stroke="#ffffff" stroke-width="2.5" />
+    <rect x="-8" y="-7" width="16" height="14" rx="2" fill="#ffffff" stroke="#000000" stroke-width="1.5" />
+    <circle cx="0" cy="0" r="3" fill="#0284c7" />
+    <line x1="8" y1="0" x2="12" y2="0" stroke="#ffffff" stroke-width="2.5" />
+    <rect x="12" y="-8" width="18" height="16" rx="2" fill="#ffffff" stroke="#000000" stroke-width="1.5" />
+    <line x1="21" y1="-8" x2="21" y2="8" stroke="#000000" stroke-width="1" />
+    <line x1="12" y1="0" x2="30" y2="0" stroke="#000000" stroke-width="1" />
+    <path d="M -4 7 L 4 7 L 2 11 L -2 11 Z" fill="#00d2ff" />
+  </g>
+</svg>
