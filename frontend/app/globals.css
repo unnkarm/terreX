@@ -1,0 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body {
+  background-color: #000000;
+  color: #e5e7eb;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Minimal Custom Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #000000; }
+::-webkit-scrollbar-thumb { background: #222222; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #444444; }
+
+.maplibregl-ctrl-attrib {
+  background: rgba(0, 0, 0, 0.8) !important;
+  color: #666666 !important;
+}
