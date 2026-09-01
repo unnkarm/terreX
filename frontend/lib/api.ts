@@ -155,8 +155,9 @@ export async function processIncoming() {
 
 export function thumbnailUrl(path: string | null): string {
   if (!path) return "";
+  const normalized = path.replace(/\\/g, "/");
   const marker = "/data/";
-  const idx = path.indexOf(marker);
-  const rel = idx >= 0 ? path.slice(idx + marker.length) : path;
+  const idx = normalized.indexOf(marker);
+  const rel = idx >= 0 ? normalized.slice(idx + marker.length) : normalized.replace(/^data\//, "");
   return `${API_BASE}/static/${rel}`;
 }
