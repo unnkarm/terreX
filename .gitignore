@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.env
+node_modules/
+.next/
+data/incoming/*
+data/scenes/*
+data/tiles/*
+!data/incoming/.gitkeep
+!data/scenes/.gitkeep
+!data/tiles/.gitkeep
+models/remoteclip/*.pt
+models/prithvi/*.pt
+models/prithvi/*.json
+models/change/*.pt
+*.pt
