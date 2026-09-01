@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import os
 import logging
+
+# Enforce offline variables before importing torch/transformers/rasterio
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("PROJ_NETWORK", "OFF")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,8 +30,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -44,14 +50,18 @@ app.include_router(routes_system.router)
 @app.on_event("startup")
 def on_startup():
     if settings.OFFLINE_MODE:
-        logger.info("OFFLINE_MODE enabled — no external network calls will be made at runtime.")
+        assert os.environ.get("HF_HUB_OFFLINE") == "1", "HF_HUB_OFFLINE guard failed"
+        assert os.environ.get("TRANSFORMERS_OFFLINE") == "1", "TRANSFORMERS_OFFLINE guard failed"
+        assert os.environ.get("PROJ_NETWORK") == "OFF", "PROJ_NETWORK guard failed"
+        logger.info("OFFLINE_MODE verified — strict air-gap guards active (HF, Transformers, PROJ).")
+
     init_db()
     logger.info("TerreX backend ready. Model dir=%s Data dir=%s", settings.MODEL_DIR, settings.DATA_DIR)
 
 
 @app.get("/")
 def root():
-    return {"service": "terrex-backend", "status": "ok"}
+    return {"service": "terrex-backend", "status": "ok", "offline_mode": settings.OFFLINE_MODE}
 
 
 @app.get("/health")

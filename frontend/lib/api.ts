@@ -28,10 +28,26 @@ export interface TextSearchResponse {
   results: SearchResult[];
 }
 
+export interface ChangeRegionItem {
+  region_id: number;
+  change_type: string;
+  confidence: number;
+  area_pixels: number;
+  area_m2: number;
+  centroid: [number, number];
+  bbox: [number, number, number, number];
+  mean_d_ndvi: number;
+  mean_d_ndwi: number;
+  mean_d_ndbi: number;
+  elongation: number;
+  rationale: string;
+}
+
 export interface ChangeDetectionResponse {
   status: string;
   message?: string;
   change_id?: string;
+  dominant_change_type?: string;
   before?: any;
   after?: any;
   change_score?: number;
@@ -39,11 +55,21 @@ export interface ChangeDetectionResponse {
   confidence?: number;
   change_area_m2?: number;
   change_mask_path?: string;
+  change_mask_url?: string;
+  earliest_supported_observation?: string;
+  registration?: {
+    is_aligned: boolean;
+    correlation_before: number;
+    correlation_after: number;
+    inliers: number;
+    dx: number;
+    dy: number;
+  };
+  change_regions?: ChangeRegionItem[];
+  suppression_reasons?: string[];
   reasons?: string[];
   method?: string;
   is_placeholder_model?: boolean;
-  registration_correlation?: number;
-  earliest_supported_observation?: string;
 }
 
 export interface SystemStatus {
@@ -69,7 +95,10 @@ export async function searchByText(query: string, filters: FilterState = {}): Pr
   if (filters.dateTo) params.set("date_to", filters.dateTo);
   if (filters.minSimilarity !== undefined) params.set("min_similarity", String(filters.minSimilarity));
   const res = await fetch(`${API_BASE}/api/search/text?${params.toString()}`);
-  if (!res.ok) throw new Error(`Search failed: ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Search failed: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -80,8 +109,12 @@ export async function searchByImage(file: File, filters: FilterState = {}): Prom
   if (filters.sensor) form.append("sensor", filters.sensor);
   if (filters.dateFrom) form.append("date_from", filters.dateFrom);
   if (filters.dateTo) form.append("date_to", filters.dateTo);
+  if (filters.minSimilarity !== undefined) form.append("min_similarity", String(filters.minSimilarity));
   const res = await fetch(`${API_BASE}/api/search/image`, { method: "POST", body: form });
-  if (!res.ok) throw new Error(`Image search failed: ${res.status}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Image search failed: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -122,7 +155,6 @@ export async function processIncoming() {
 
 export function thumbnailUrl(path: string | null): string {
   if (!path) return "";
-  // backend serves tile thumbnails as static files under /static (mounted to DATA_DIR)
   const marker = "/data/";
   const idx = path.indexOf(marker);
   const rel = idx >= 0 ? path.slice(idx + marker.length) : path;

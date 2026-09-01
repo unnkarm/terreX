@@ -3,12 +3,15 @@ version: "3.9"
 # TerreX — fully local stack: frontend, backend (AI inference runs in-process
 # here, per the "no unnecessary microservices" instruction), Qdrant, and
 # Postgres/PostGIS. No service in this file talks to the internet at runtime.
+# Enforces strict 4GB RAM ceiling via per-service memory limits.
 
 services:
   postgres:
     image: postgis/postgis:16-3.4
     container_name: terrex-postgres
     restart: unless-stopped
+    mem_limit: 384m
+    command: postgres -c shared_buffers=128MB -c work_mem=4MB -c max_connections=50
     environment:
       POSTGRES_USER: terrex
       POSTGRES_PASSWORD: terrex
@@ -26,9 +29,10 @@ services:
     networks: [terrex-net]
 
   qdrant:
-    image: qdrant/qdrant:v1.9.2
+    image: qdrant/qdrant:v1.13.6
     container_name: terrex-qdrant
     restart: unless-stopped
+    mem_limit: 512m
     volumes:
       - qdrant_data:/qdrant/storage
     ports:
@@ -41,6 +45,7 @@ services:
       dockerfile: Dockerfile
     container_name: terrex-backend
     restart: unless-stopped
+    mem_limit: 1536m
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,6 +53,9 @@ services:
         condition: service_started
     environment:
       OFFLINE_MODE: "true"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      PROJ_NETWORK: "OFF"
       MODEL_DIR: /models
       DATA_DIR: /data
       QDRANT_URL: http://qdrant:6333
@@ -68,6 +76,7 @@ services:
         NEXT_PUBLIC_API_URL: http://localhost:8000
     container_name: terrex-frontend
     restart: unless-stopped
+    mem_limit: 512m
     depends_on:
       - backend
     environment:

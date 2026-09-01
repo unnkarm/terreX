@@ -22,14 +22,18 @@ from services.ranking import compute_final_score
 
 def _hits_to_results(hits, session, w_semantic_only=False):
     results = []
-    tile_ids = [h.id for h in hits]
+    # After the vector_store migration, the real tile_id string is in the Qdrant
+    # payload (h.payload["tile_id"]); h.id is a uint64 hash used only internally.
+    tile_ids = [h.payload.get("tile_id") for h in hits if h.payload]
+    tile_ids = [t for t in tile_ids if t]
     if not tile_ids:
         return results
     tiles = {t.tile_id: t for t in session.execute(
         select(Tile).where(Tile.tile_id.in_(tile_ids))
     ).scalars()}
     for h in hits:
-        tile = tiles.get(h.id)
+        tile_id_str = (h.payload or {}).get("tile_id")
+        tile = tiles.get(tile_id_str)
         if tile is None:
             continue
         semantic_score = float(h.score)
@@ -58,6 +62,7 @@ def _hits_to_results(hits, session, w_semantic_only=False):
         })
     results.sort(key=lambda r: r["final_score"], reverse=True)
     return results
+
 
 
 def semantic_text_search(

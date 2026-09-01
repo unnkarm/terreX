@@ -25,6 +25,7 @@ export default function WorkspacePage() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [sensors, setSensors] = useState<string[]>([]);
   const [ingestMsg, setIngestMsg] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
     getSystemStatus().then(setStatus).catch(() => setStatus(null));
@@ -35,11 +36,14 @@ export default function WorkspacePage() {
 
   const runTextSearch = async (query: string) => {
     setLoading(true);
+    setSearchError(null);
     try {
       const res = await searchByText(query, filters);
       setResults(res.results);
       setPlaceholderWarning(res.embedding_is_placeholder);
       setSelected(res.results[0] ?? null);
+    } catch (err: any) {
+      setSearchError(err?.message || "Text search failed.");
     } finally {
       setLoading(false);
     }
@@ -47,11 +51,14 @@ export default function WorkspacePage() {
 
   const runImageSearch = async (file: File) => {
     setLoading(true);
+    setSearchError(null);
     try {
       const res = await searchByImage(file, filters);
       setResults(res.results);
       setPlaceholderWarning(res.embedding_is_placeholder);
       setSelected(res.results[0] ?? null);
+    } catch (err: any) {
+      setSearchError(err?.message || "Image search failed.");
     } finally {
       setLoading(false);
     }
@@ -115,6 +122,12 @@ export default function WorkspacePage() {
       <div className="px-4 py-2.5 border-b border-neutral-800 bg-neutral-950 space-y-2">
         <SearchBar onTextSearch={runTextSearch} onImageSearch={runImageSearch} loading={loading} />
         <FilterBar filters={filters} onChange={setFilters} sensors={sensors} />
+        {searchError && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded border border-red-500/40 bg-red-950/40 text-red-400 text-xs font-mono">
+            <span className="font-bold">ERROR:</span>
+            <span>{searchError}</span>
+          </div>
+        )}
         {ingestMsg && <p className="text-[11px] font-mono text-neutral-300">{ingestMsg}</p>}
       </div>
 

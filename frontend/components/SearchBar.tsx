@@ -41,7 +41,7 @@ export default function SearchBar({ onTextSearch, onImageSearch, loading }: Prop
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,.tif,.tiff,.geotiff"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
