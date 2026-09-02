@@ -93,13 +93,13 @@ class _PlaceholderVisualEmbedder:
     def __init__(self, dim: int):
         self.dim = dim
 
-    def _project(self, seed_bytes: bytes, features: np.ndarray) -> np.ndarray:
-        # Deterministic pseudo-random projection matrix from a hash seed,
-        # so the same content always maps to the same vector (needed for
-        # image-to-image search to behave sensibly) without ever calling
-        # out to a network or pretending to be a trained model.
-        seed = int.from_bytes(hashlib.sha256(seed_bytes).digest()[:8], "little")
-        rng = np.random.default_rng(seed % (2**32 - 1))
+    def _project(self, features: np.ndarray) -> np.ndarray:
+        # We use a FIXED seed for the projection matrix. If we used a seed based
+        # on the image bytes, every slightly different image would get a completely
+        # different random matrix, destroying all visual similarity (acting as a
+        # cryptographic hash). A constant projection matrix maps similar visual
+        # features to similar 512D vectors.
+        rng = np.random.default_rng(42)
         proj = rng.standard_normal((features.shape[0], self.dim)).astype(np.float32)
         vec = features @ proj
         norm = np.linalg.norm(vec) + 1e-8
@@ -121,7 +121,7 @@ class _PlaceholderVisualEmbedder:
         gx = np.abs(np.diff(gray, axis=0)).mean()
         gy = np.abs(np.diff(gray, axis=1)).mean()
         features = np.concatenate([means, stds, hist, [gx, gy]])
-        return self._project(img.tobytes(), features)
+        return self._project(features)
 
     def embed_text(self, text: str) -> np.ndarray:
         # Bag-of-character-ngram hashing → deterministic vector. Captures
@@ -133,7 +133,7 @@ class _PlaceholderVisualEmbedder:
             h = int(hashlib.sha256(tok.encode()).hexdigest(), 16)
             feat[h % 64] += 1.0
         feat = feat / (np.linalg.norm(feat) + 1e-8)
-        return self._project(text.encode(), feat)
+        return self._project(feat)
 
 
 class EmbeddingService:

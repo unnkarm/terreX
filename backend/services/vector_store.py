@@ -18,7 +18,7 @@ logger = logging.getLogger("terrex.vector_store")
 
 class VectorStore:
     def __init__(self):
-        self.client = QdrantClient(url=settings.QDRANT_URL, check_compatibility=False)
+        self.client = QdrantClient(url=settings.QDRANT_URL)
         self.collection = settings.QDRANT_COLLECTION
         self._ensure_collection()
 
@@ -100,16 +100,16 @@ class VectorStore:
 
         query_filter = qm.Filter(must=must) if must else None
 
-        # qdrant-client >= 1.10: use query_points() instead of the removed search()
-        response = self.client.query_points(
+        # using search() for qdrant-client 1.9.1
+        response = self.client.search(
             collection_name=self.collection,
-            query=vector.tolist(),
+            query_vector=vector.tolist(),
             query_filter=query_filter,
             limit=top_k,
             score_threshold=min_similarity if min_similarity > 0 else None,
             with_payload=True,
         )
-        return response.points
+        return response
 
 
 vector_store = VectorStore()
