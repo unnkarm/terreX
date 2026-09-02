@@ -153,6 +153,17 @@ export async function processIncoming() {
   return res.json();
 }
 
+export async function uploadFileAndIngest(file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_BASE}/api/ingest/upload`, { method: "POST", body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Upload failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 export function thumbnailUrl(path: string | null): string {
   if (!path) return "";
   const normalized = path.replace(/\\/g, "/");

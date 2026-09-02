@@ -24,6 +24,7 @@ export default function WorkspacePage() {
   const [placeholderWarning, setPlaceholderWarning] = useState(false);
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [sensors, setSensors] = useState<string[]>([]);
+  const [hasData, setHasData] = useState<boolean | null>(null);
   const [ingestMsg, setIngestMsg] = useState<string | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [isResultsOpen, setIsResultsOpen] = useState(true);
@@ -32,8 +33,11 @@ export default function WorkspacePage() {
   useEffect(() => {
     getSystemStatus().then(setStatus).catch(() => setStatus(null));
     listScenes()
-      .then((scenes) => setSensors(Array.from(new Set(scenes.map((s: any) => s.sensor).filter(Boolean)))))
-      .catch(() => {});
+      .then((scenes) => {
+        setHasData(scenes.length > 0);
+        setSensors(Array.from(new Set(scenes.map((s: any) => s.sensor).filter(Boolean))));
+      })
+      .catch(() => setHasData(false));
   }, []);
 
   const runTextSearch = async (query: string) => {
@@ -66,16 +70,6 @@ export default function WorkspacePage() {
     }
   };
 
-  const runProcessIncoming = async () => {
-    setIngestMsg("Processing data/incoming/ …");
-    try {
-      const res = await processIncoming();
-      setIngestMsg(`Processed ${res.processed.length} new scene(s), ${res.failed.length} failed.`);
-    } catch (e) {
-      setIngestMsg(`Error: ${e}`);
-    }
-  };
-
   const center: [number, number] = useMemo(() => {
     if (results.length > 0) return [results[0].lon, results[0].lat];
     return [77.25, 28.55]; // demo AOI default
@@ -83,6 +77,24 @@ export default function WorkspacePage() {
 
   return (
     <main className="h-screen w-screen flex flex-col bg-black font-sans relative overflow-hidden">
+      {/* Empty State Overlay */}
+      {hasData === false && (
+        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md scanlines">
+          <div className="flex flex-col items-center gap-6 p-10 border border-neutral-800 bg-black/80 shadow-[0_0_50px_rgba(0,0,0,1)] rounded-3xl max-w-lg text-center">
+            <svg className="w-16 h-16 text-emerald-500/50 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+            </svg>
+            <h2 className="text-2xl font-mono text-emerald-400 font-bold uppercase tracking-widest">Grid Offline</h2>
+            <p className="text-neutral-400 font-sans text-sm leading-relaxed">
+              The Vector Index is currently empty. No observation data is available for RAG queries. You must ingest satellite scenes into the system before proceeding.
+            </p>
+            <Link href="/ingest" className="px-8 py-3 bg-emerald-900/30 border border-emerald-500/50 hover:bg-emerald-800/60 hover:border-emerald-400 text-emerald-400 font-mono text-xs uppercase tracking-widest font-bold rounded-full transition-all mt-4 shadow-[0_0_20px_rgba(16,185,129,0.2)] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)]">
+              INITIALIZE INGESTION SEQUENCE →
+            </Link>
+          </div>
+        </div>
+      )}
+
       {/* Full Bleed Map Background */}
       <div className="absolute inset-0 z-0">
         <MapView results={results} selectedTileId={selected?.tile_id ?? null} onSelect={setSelected} center={center} />
@@ -110,12 +122,12 @@ export default function WorkspacePage() {
               </span>
             </>
           )}
-          <button
-            onClick={runProcessIncoming}
+          <Link
+            href="/ingest"
             className="ml-4 px-3 py-1.5 rounded-sm border border-neutral-700 text-neutral-300 hover:border-emerald-500 hover:text-emerald-400 transition-all bg-black/50"
           >
-            [ INGEST ]
-          </button>
+            [ ADD DATA ]
+          </Link>
           <Link
             href="/"
             className="px-3 py-1.5 rounded-sm border border-neutral-700 text-neutral-400 hover:text-white hover:border-neutral-500 transition-all bg-black/50"
