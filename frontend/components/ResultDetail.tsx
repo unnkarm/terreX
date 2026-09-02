@@ -46,31 +46,31 @@ export default function ResultDetail({ result, onClose }: Props) {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-4 space-y-4 text-xs font-sans">
+    <div className="h-full overflow-y-auto p-4 space-y-4 text-xs font-sans scanlines">
       {/* Header */}
       <div className="flex items-start justify-between border-b border-neutral-800 pb-2">
         <div>
-          <h2 className="text-sm font-semibold text-neutral-100 flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-neutral-300 flex items-center gap-2 uppercase tracking-wide">
             Target Inspection
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-300 font-mono">
+            <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-neutral-900 border border-neutral-700 text-neutral-400 font-mono tracking-wider">
               {result.sensor ?? "EO"}
             </span>
           </h2>
-          <p className="text-[11px] text-neutral-500 font-mono mt-0.5">
-            {result.lat.toFixed(5)}°N, {result.lon.toFixed(5)}°E
+          <p className="text-[11px] text-neutral-500 font-mono mt-1">
+            <span className="text-emerald-700 font-bold mr-1">{'>'}</span> {result.lat.toFixed(5)}°N, {result.lon.toFixed(5)}°E
           </p>
         </div>
-        <button onClick={onClose} className="text-neutral-500 hover:text-neutral-200 text-base">✕</button>
+        <button onClick={onClose} className="text-neutral-500 hover:text-red-500 transition-colors text-base font-mono">✕</button>
       </div>
 
       {/* Metadata Grid */}
-      <div className="grid grid-cols-2 gap-2 bg-neutral-950 p-2.5 rounded border border-neutral-800">
-        <Field label="Sensor" value={result.sensor ?? "Unknown"} />
-        <Field label="Acquisition" value={result.acquisition_date?.slice(0, 10) ?? "Unknown"} />
-        <Field label="Semantic Match" value={`${(result.similarity_score * 100).toFixed(1)}%`} />
-        <Field label="Quality Score" value={(result.quality_score ?? 0).toFixed(3)} />
-        <Field label="Cloud Cover" value={`${((result.cloud_fraction ?? 0) * 100).toFixed(1)}%`} />
-        <Field label="Composite Rank" value={(result.final_score).toFixed(3)} highlight />
+      <div className="grid grid-cols-2 gap-px bg-neutral-800 border border-neutral-800 rounded-sm overflow-hidden">
+        <Field label="SENSOR" value={result.sensor ?? "UNKNOWN"} />
+        <Field label="ACQUISITION" value={result.acquisition_date?.slice(0, 10) ?? "UNKNOWN"} />
+        <Field label="SEMANTIC MATCH" value={`${(result.similarity_score * 100).toFixed(1)}%`} />
+        <Field label="QUALITY SCORE" value={(result.quality_score ?? 0).toFixed(3)} />
+        <Field label="CLOUD COVER" value={`${((result.cloud_fraction ?? 0) * 100).toFixed(1)}%`} />
+        <Field label="COMPOSITE RANK" value={(result.final_score).toFixed(3)} highlight />
       </div>
 
       {result.embedding_is_placeholder && (
@@ -82,46 +82,50 @@ export default function ResultDetail({ result, onClose }: Props) {
       {/* Thumbnail */}
       {result.thumbnail_path && (
         <div className="space-y-1">
-          <p className="text-[10px] uppercase tracking-wider text-neutral-500 font-semibold">Observation Patch</p>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={thumbnailUrl(result.thumbnail_path)}
-            alt="tile"
-            className="w-full h-44 object-cover rounded border border-neutral-800"
-          />
+          <p className="text-[10px] uppercase tracking-widest text-neutral-500 font-semibold flex items-center gap-2">
+            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-sm"></span> OBSERVATION PATCH
+          </p>
+          <div className="p-1 border border-neutral-800 bg-neutral-950 rounded-sm">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={thumbnailUrl(result.thumbnail_path)}
+              alt="tile"
+              className="w-full h-44 object-cover filter grayscale-0 hover:grayscale-[20%] transition duration-300"
+            />
+          </div>
         </div>
       )}
 
       {/* Change Detection Section */}
-      <div className="border-t border-neutral-800 pt-3 space-y-3">
+      <div className="border-t border-neutral-800 pt-4 space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs uppercase tracking-wider text-neutral-400 font-semibold">Multi-Temporal Change</h3>
-          <span className="text-[10px] text-neutral-500">2-Layer RS Engine</span>
+          <h3 className="text-xs uppercase tracking-widest text-emerald-500/80 font-bold">Multi-Temporal Change</h3>
+          <span className="text-[9px] text-neutral-600 font-mono tracking-widest">2-LAYER RS ENG</span>
         </div>
 
         {/* Date Filters */}
-        <div className="space-y-1.5 bg-neutral-950 p-2 rounded border border-neutral-800">
-          <div className="flex items-center gap-1.5 text-[11px]">
+        <div className="space-y-2 bg-neutral-900/50 p-2.5 rounded-sm border border-neutral-800/80">
+          <div className="flex items-center gap-2 text-[11px]">
             <input
               type="date"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
-              className="bg-black border border-neutral-700 rounded px-1.5 py-1 text-neutral-200 flex-1 font-mono text-[11px]"
+              className="bg-black border border-neutral-700 focus:border-emerald-700 focus:ring-1 focus:ring-emerald-700/50 outline-none rounded-sm px-2 py-1 text-emerald-100 flex-1 font-mono text-[11px] transition-all"
             />
-            <span className="text-neutral-500">→</span>
+            <span className="text-neutral-600 font-mono">T0→T1</span>
             <input
               type="date"
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
-              className="bg-black border border-neutral-700 rounded px-1.5 py-1 text-neutral-200 flex-1 font-mono text-[11px]"
+              className="bg-black border border-neutral-700 focus:border-emerald-700 focus:ring-1 focus:ring-emerald-700/50 outline-none rounded-sm px-2 py-1 text-emerald-100 flex-1 font-mono text-[11px] transition-all"
             />
           </div>
           <button
             onClick={runChangeDetection}
             disabled={loading}
-            className="w-full py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-xs transition disabled:opacity-50"
+            className="w-full py-1.5 rounded-sm bg-neutral-800 border border-neutral-700 hover:border-emerald-500 hover:bg-emerald-950/30 text-emerald-400 font-mono tracking-widest text-[10px] uppercase transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? "Analyzing Temporal Observations…" : "Analyze Multi-Temporal Change"}
+            {loading ? "INITIALIZING SEQUENCE..." : "EXECUTE ANALYSIS"}
           </button>
         </div>
 
@@ -237,19 +241,19 @@ export default function ResultDetail({ result, onClose }: Props) {
 
             {/* Analyst Review Queue / Confirm & Reject Actions */}
             <div className="space-y-1 pt-1">
-              <p className="text-[10px] uppercase tracking-wider text-neutral-500 font-semibold">Analyst Decision</p>
+              <p className="text-[10px] uppercase tracking-widest text-neutral-500 font-semibold">Analyst Decision</p>
               <div className="flex gap-2">
                 <button
                   onClick={() => sendFeedback("confirm")}
-                  className="flex-1 py-1.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-700/60 hover:bg-emerald-900/60 text-xs font-semibold transition"
+                  className="flex-1 py-1.5 rounded-sm bg-neutral-900 border border-neutral-700 hover:border-emerald-500 hover:bg-emerald-950/40 text-emerald-400 text-[10px] font-mono tracking-widest uppercase transition-all"
                 >
-                  ✓ Confirm Finding
+                  [ CONFIRM ]
                 </button>
                 <button
                   onClick={() => sendFeedback("reject")}
-                  className="flex-1 py-1.5 rounded bg-rose-950/60 text-rose-300 border border-rose-700/60 hover:bg-rose-900/60 text-xs font-semibold transition"
+                  className="flex-1 py-1.5 rounded-sm bg-neutral-900 border border-neutral-700 hover:border-red-500 hover:bg-red-950/40 text-red-400 text-[10px] font-mono tracking-widest uppercase transition-all"
                 >
-                  ✕ Suppress False Alarm
+                  [ SUPPRESS ]
                 </button>
               </div>
               {feedbackSent && (
@@ -267,9 +271,9 @@ export default function ResultDetail({ result, onClose }: Props) {
 
 function Field({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <div>
-      <p className="text-[10px] text-neutral-500">{label}</p>
-      <p className={`font-mono text-[11px] truncate ${highlight ? "text-emerald-400 font-semibold" : "text-neutral-200"}`}>
+    <div className="bg-neutral-900 p-2 flex flex-col justify-center">
+      <p className="text-[9px] uppercase tracking-widest text-neutral-500">{label}</p>
+      <p className={`font-mono text-[11px] truncate mt-0.5 ${highlight ? "text-emerald-400 font-bold" : "text-neutral-300"}`}>
         {value}
       </p>
     </div>

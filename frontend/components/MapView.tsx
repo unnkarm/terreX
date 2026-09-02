@@ -92,7 +92,7 @@ export default function MapView({ results, selectedTileId, onSelect, center }: P
       attributionControl: false,
     });
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
     map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
 
     mapRef.current = map;
@@ -178,50 +178,50 @@ export default function MapView({ results, selectedTileId, onSelect, center }: P
       <div ref={containerRef} className="w-full h-full" />
 
       {/* Basemap Switcher Tactical Overlay */}
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-1 p-1 rounded-lg bg-neutral-950/85 backdrop-blur border border-neutral-800 shadow-xl text-[11px] font-mono">
+      <div className="absolute top-[80px] left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 p-1 rounded-sm bg-black/80 backdrop-blur-md border border-neutral-800 shadow-[0_0_15px_rgba(0,0,0,0.8)] text-[10px] font-mono tracking-widest uppercase">
         <button
           onClick={() => switchBasemap("satellite")}
-          className={`px-2 py-1 rounded transition ${
+          className={`px-3 py-1.5 rounded-sm transition ${
             basemap === "satellite"
-              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold"
-              : "text-neutral-400 hover:text-neutral-200"
+              ? "bg-emerald-950/40 text-emerald-400 border border-emerald-500/40 font-bold"
+              : "text-neutral-500 hover:text-emerald-500/70 border border-transparent"
           }`}
           title="High-resolution global satellite imagery"
         >
-          🛰️ Satellite
+          [ SATELLITE ]
         </button>
         <button
           onClick={() => switchBasemap("dark")}
-          className={`px-2 py-1 rounded transition ${
+          className={`px-3 py-1.5 rounded-sm transition ${
             basemap === "dark"
-              ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-semibold"
-              : "text-neutral-400 hover:text-neutral-200"
+              ? "bg-cyan-950/40 text-cyan-400 border border-cyan-500/40 font-bold"
+              : "text-neutral-500 hover:text-cyan-500/70 border border-transparent"
           }`}
           title="CARTO dark tactical basemap"
         >
-          🌑 Tactical Dark
+          [ TACTICAL ]
         </button>
         <button
           onClick={() => switchBasemap("osm")}
-          className={`px-2 py-1 rounded transition ${
+          className={`px-3 py-1.5 rounded-sm transition ${
             basemap === "osm"
-              ? "bg-blue-500/20 text-blue-300 border border-blue-500/40 font-semibold"
-              : "text-neutral-400 hover:text-neutral-200"
+              ? "bg-blue-950/40 text-blue-400 border border-blue-500/40 font-bold"
+              : "text-neutral-500 hover:text-blue-500/70 border border-transparent"
           }`}
           title="OpenStreetMap street and boundary map"
         >
-          🗺️ Streets
+          [ STREETS ]
         </button>
         <button
           onClick={() => switchBasemap("offline")}
-          className={`px-2 py-1 rounded transition ${
+          className={`px-3 py-1.5 rounded-sm transition ${
             basemap === "offline"
-              ? "bg-neutral-700 text-white font-semibold"
-              : "text-neutral-400 hover:text-neutral-200"
+              ? "bg-neutral-800 text-neutral-200 border border-neutral-600 font-bold"
+              : "text-neutral-500 hover:text-neutral-400 border border-transparent"
           }`}
           title="Strict offline air-gapped grid"
         >
-          🔒 Offline Grid
+          [ OFFLINE ]
         </button>
       </div>
     </div>
