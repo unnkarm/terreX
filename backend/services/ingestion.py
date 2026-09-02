@@ -149,13 +149,10 @@ def _read_tile_rgb_float(
     b = dataset.read(b_idx, window=window).astype(np.float32)
 
     stack = np.stack([r, g, b], axis=0)  # (3, H, W)
-    out = np.zeros_like(stack)
-    for i in range(3):
-        band = stack[i]
-        lo, hi = np.percentile(band, [2, 98])
-        if hi - lo < 1e-6:
-            hi = lo + 1.0
-        out[i] = np.clip((band - lo) / (hi - lo), 0.0, 1.0)
+    lo, hi = np.percentile(stack, [2, 98])
+    if hi - lo < 1e-6:
+        hi = lo + 1.0
+    out = np.clip((stack - lo) / (hi - lo), 0.0, 1.0)
     return np.transpose(out, (1, 2, 0))  # (H, W, 3)
 
 
