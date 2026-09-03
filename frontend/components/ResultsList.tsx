@@ -63,7 +63,7 @@ export default function ResultsList({
           const sub = r.location_name ?? "Yamuna Riverbank Perimeter";
           const thumb = r.thumbnail_path
             ? thumbnailUrl(r.thumbnail_path)
-            : "https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=400&auto=format&fit=crop&q=80";
+            : "https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=400&auto=format&fit=crop&q=80";
 
           return (
             <div

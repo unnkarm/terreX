@@ -190,7 +190,7 @@ export default function ReviewQueuePage() {
                     <div className="w-full h-32 rounded bg-neutral-900 border border-neutral-800 overflow-hidden relative">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src="https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=600&auto=format&fit=crop&q=80"
+                        src="https://images.unsplash.com/photo-1581084324492-c8076f130f86?w=600&auto=format&fit=crop&q=80"
                         alt="baseline"
                         className="w-full h-full object-cover"
                       />
@@ -204,7 +204,7 @@ export default function ReviewQueuePage() {
                     <div className="w-full h-32 rounded bg-neutral-900 border border-neutral-800 overflow-hidden relative">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src="https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=600&auto=format&fit=crop&q=80"
+                        src="https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=600&auto=format&fit=crop&q=80"
                         alt="current"
                         className="w-full h-full object-cover"
                       />
