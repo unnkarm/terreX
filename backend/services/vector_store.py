@@ -73,6 +73,14 @@ class VectorStore:
             points_selector=qm.PointIdsList(points=[self._str_to_uint64(tile_id)]),
         )
 
+    def count(self) -> int:
+        """Return the number of indexed vectors, or zero when Qdrant is unavailable."""
+        try:
+            return int(self.client.count(collection_name=self.collection, exact=True).count)
+        except Exception as exc:
+            logger.warning("Could not count vectors in '%s': %s", self.collection, exc)
+            return 0
+
     def search(
         self,
         vector,
@@ -89,9 +97,19 @@ class VectorStore:
         if date_from or date_to:
             rng = {}
             if date_from:
-                rng["gte"] = str(date_from)[:19]
+                df = str(date_from)[:19]
+                if len(df) == 10:
+                    df += "T00:00:00Z"
+                elif not df.endswith("Z") and not "+" in df:
+                    df += "Z"
+                rng["gte"] = df
             if date_to:
-                rng["lte"] = str(date_to)[:19]
+                dt = str(date_to)[:19]
+                if len(dt) == 10:
+                    dt += "T23:59:59Z"
+                elif not dt.endswith("Z") and not "+" in dt:
+                    dt += "Z"
+                rng["lte"] = dt
             must.append(qm.FieldCondition(key="acquisition_date", range=qm.DatetimeRange(**rng)))
         if aoi_bbox:
             min_lon, min_lat, max_lon, max_lat = aoi_bbox

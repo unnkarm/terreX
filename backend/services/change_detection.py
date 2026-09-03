@@ -30,7 +30,7 @@ from services.quality import (
 from services.false_alarm import evaluate, ObservationQuality
 from services.algorithms.registration import register_image_pair, RegistrationResult
 from services.algorithms.normalization import normalize_histogram_match
-from services.algorithms.spectral import compute_spectral_indices, compute_spectral_deltas
+from services.algorithms.spectral import compute_spectral_indices, compute_spectral_deltas, SpectralIndices
 from services.algorithms.change_classifier import classify_change_regions, ChangeRegion
 
 
@@ -66,6 +66,18 @@ def _load_tile_multispectral_or_rgb(tile: Tile) -> Tuple[np.ndarray, Optional[Di
     rgb_chw = _load_tile_rgb_chw(tile)
     rgb_hwc = np.transpose(rgb_chw, (1, 2, 0))
     return rgb_hwc, {"red": 0, "green": 1, "blue": 2}
+
+
+def _load_precomputed_indices(tile: Tile) -> Optional[SpectralIndices]:
+    """Load ingest-time spectral index maps when available."""
+    try:
+        data = np.load(Path(tile.tile_path).with_suffix(".npz"), allow_pickle=True)
+        if all(key in data for key in ("ndvi", "ndwi", "ndbi")):
+            band_map = data["band_map"].item() if "band_map" in data else {}
+            return SpectralIndices(data["ndvi"], data["ndwi"], data["ndbi"], "nir" in band_map, band_map)
+    except Exception:
+        pass
+    return None
 
 
 def _difference_to_change_map(before_feat: np.ndarray, after_feat: np.ndarray) -> np.ndarray:
@@ -107,6 +119,10 @@ def find_candidate_tiles(
     """
     dt_from = _parse_date(date_from)
     dt_to = _parse_date(date_to)
+
+    # If date_to was just a date (YYYY-MM-DD), make it inclusive to the end of that day
+    if dt_to and len(str(date_to)) == 10:
+        dt_to = dt_to.replace(hour=23, minute=59, second=59)
 
     with get_session() as session:
         query = select(Tile).where(
@@ -244,8 +260,8 @@ def run_change_detection(
         )
 
         # 8. Layer-2 Change Typing (Construction, Clearance, Water, Road)
-        before_indices = compute_spectral_indices(before_raster, before_bmap)
-        after_indices = compute_spectral_indices(norm_after_raster, after_bmap)
+        before_indices = _load_precomputed_indices(before_tile) or compute_spectral_indices(before_raster, before_bmap)
+        after_indices = _load_precomputed_indices(after_tile) or compute_spectral_indices(norm_after_raster, after_bmap)
 
         classified_regions: List[ChangeRegion] = classify_change_regions(
             change_mask=change_mask_binary,
