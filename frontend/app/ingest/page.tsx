@@ -119,7 +119,7 @@ export default function IngestPage() {
 
     try {
       await stageEOProviderScene(sourceType, item.item_id, item.bbox);
-      addLog(`FORMAT NORMALIZATION: Converted ${item.provider} scene into common GeoTIFF.`);
+      addLog(`FORMAT NORMALIZATION: Converted ${item.provider || sourceType} scene into common GeoTIFF.`);
     } catch (err: any) {
       addLog(`NOTICE: Running with staged offline mock: ${err?.message}`);
     } finally {
