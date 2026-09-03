@@ -119,7 +119,13 @@ export default function IngestPage() {
 
     try {
       await stageEOProviderScene(sourceType, item.item_id, item.bbox);
-      addLog(`FORMAT NORMALIZATION: Converted ${item.provider} scene into common GeoTIFF.`);
+      addLog(`FORMAT NORMALIZATION: Converted ${item.provider || sourceType} scene into common GeoTIFF.`);
+      addLog("INDEXING: Running tiling, spectral analysis, and vector embedding into Qdrant...");
+      const res = await processIncoming();
+      if (res.metrics) {
+        setMetrics(res.metrics);
+        addLog(`SUCCESS: Staged & ingested ${res.metrics.tiles_created} tile(s). Vector store count: ${res.metrics.vector_index_count}.`);
+      }
     } catch (err: any) {
       addLog(`NOTICE: Running with staged offline mock: ${err?.message}`);
     } finally {

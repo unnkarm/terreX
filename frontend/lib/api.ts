@@ -82,6 +82,7 @@ export interface SystemStatus {
   models: {
     remoteclip: { staged: boolean; active_model: string };
     prithvi: { staged: boolean; active_model: string };
+  };
   paths?: {
     model_dir: string;
     data_dir: string;
@@ -123,7 +124,6 @@ export interface ChatResponse {
   latency_ms?: number;
   intent?: { action?: string; tool_name?: string; arguments?: Record<string, unknown> };
   status?: SystemStatus["chat"];
->>>>>>> origin/main
 }
 
 export interface FilterState {
@@ -165,8 +165,8 @@ export interface ReviewQueueItem {
   reviewedAt?: string;
 }
 
-export async function searchByText(query: string, filters: FilterState = {}): Promise<TextSearchResponse> {
-  const params = new URLSearchParams({ q: query, top_k: "20" });
+export async function searchByText(query: string, filters: FilterState = {}, topK: number = 20): Promise<TextSearchResponse> {
+  const params = new URLSearchParams({ q: query, top_k: String(topK) });
   if (filters.sensor) params.set("sensor", filters.sensor);
   if (filters.dateFrom) params.set("date_from", filters.dateFrom);
   if (filters.dateTo) params.set("date_to", filters.dateTo);
@@ -193,10 +193,10 @@ export async function searchByText(query: string, filters: FilterState = {}): Pr
   return getDemoSearchResults(query, filters);
 }
 
-export async function searchByImage(file: File, filters: FilterState = {}): Promise<TextSearchResponse> {
+export async function searchByImage(file: File, filters: FilterState = {}, topK: number = 20): Promise<TextSearchResponse> {
   const form = new FormData();
   form.append("file", file);
-  form.append("top_k", "20");
+  form.append("top_k", String(topK));
   if (filters.sensor) form.append("sensor", filters.sensor);
   if (filters.dateFrom) form.append("date_from", filters.dateFrom);
   if (filters.dateTo) form.append("date_to", filters.dateTo);
@@ -742,6 +742,7 @@ export interface EOProviderSearchResult {
   bbox: [number, number, number, number];
   spatial_resolution_m: number;
   bands: string[];
+  provider?: string;
   metadata?: any;
 }
 

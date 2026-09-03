@@ -13,7 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-import requests
+import json
+import urllib.request
+import urllib.error
 from data_sources.base import BaseEODataSource, EOSearchResult
 
 logger = logging.getLogger("terrex.data_sources.sentinel2")
@@ -44,9 +46,14 @@ class Sentinel2DataSource(BaseEODataSource):
         }
 
         try:
-            res = requests.post(self.STAC_SEARCH_URL, json=payload, timeout=20)
-            res.raise_for_status()
-            features = res.json().get("features", [])
+            req = urllib.request.Request(
+                self.STAC_SEARCH_URL,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json", "User-Agent": "TerreX/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                features = data.get("features", [])
         except Exception as exc:
             logger.warning("Planetary Computer search encountered network issue: %s. Returning structured results.", exc)
             return []

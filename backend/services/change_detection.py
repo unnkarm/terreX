@@ -14,7 +14,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 import numpy as np
 from PIL import Image
 from sqlalchemy import select, and_
@@ -212,7 +215,12 @@ def run_change_detection(
 
         # Resize probability map to full tile resolution
         h_orig, w_orig = before_tile.tile_size, before_tile.tile_size
-        prob_map_full = cv2.resize(change_prob_map, (w_orig, h_orig), interpolation=cv2.INTER_LINEAR)
+        if cv2 is not None:
+            prob_map_full = cv2.resize(change_prob_map, (w_orig, h_orig), interpolation=cv2.INTER_LINEAR)
+        else:
+            prob_map_full = np.asarray(
+                Image.fromarray(change_prob_map.astype(np.float32)).resize((w_orig, h_orig), Image.Resampling.BILINEAR)
+            )
         change_mask_binary = (prob_map_full > settings.CHANGE_PROB_THRESHOLD).astype(np.uint8)
 
         # 5. Quality Diagnostics

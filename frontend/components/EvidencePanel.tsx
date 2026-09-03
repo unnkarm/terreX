@@ -10,6 +10,8 @@ interface EvidencePanelProps {
   registrationCorr?: number;
   cloudFraction?: number;
   validPixelRatio?: number;
+  reasons?: string[];
+  suppressionReasons?: string[];
 }
 
 export default function EvidencePanel({
@@ -20,6 +22,8 @@ export default function EvidencePanel({
   registrationCorr = 0.96,
   cloudFraction = 0.03,
   validPixelRatio = 0.98,
+  reasons,
+  suppressionReasons,
 }: EvidencePanelProps) {
   const confPercent = Math.round(confidence * 100);
 

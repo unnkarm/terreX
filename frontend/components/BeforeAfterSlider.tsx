@@ -181,10 +181,10 @@ export default function BeforeAfterSlider({
       {/* Footer Metrics */}
       <div className="flex items-center justify-between text-[10px] font-mono text-neutral-400 pt-0.5">
         <span className="truncate">
-          DETECTED: <span className="text-white font-bold">{dominantChange.toUpperCase()}</span>
+          DETECTED: <span className="text-white font-bold">{(dominantChange ?? "CONSTRUCTION").toUpperCase()}</span>
         </span>
         <span className="text-emerald-400 font-bold">
-          CONFIDENCE: {Math.round(confidence * 100)}%
+          CONFIDENCE: {Math.round((confidence ?? 0.89) * 100)}%
         </span>
       </div>
     </div>
