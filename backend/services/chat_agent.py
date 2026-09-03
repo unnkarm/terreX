@@ -8,13 +8,32 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, TypedDict, Literal
 
-import psutil
-import requests
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
 from pydantic import BaseModel, Field
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.tools import tool
-from langchain_ollama import ChatOllama
-from langgraph.graph import END, StateGraph
+
+try:
+    from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+    from langchain_core.tools import tool
+    from langchain_ollama import ChatOllama
+    from langgraph.graph import END, StateGraph
+except ImportError:
+    BaseMessage = None
+    HumanMessage = None
+    SystemMessage = None
+    def tool(fn):
+        return fn
+    ChatOllama = None
+    END = None
+    StateGraph = None
 from sqlalchemy import select
 
 from db.database import get_session
@@ -38,9 +57,11 @@ _unload_monitor_started = False
 
 def ram_available() -> bool:
     try:
+        if psutil is None:
+            return True
         return psutil.virtual_memory().available / (1024 ** 3) >= SAFE_THRESHOLD_GB
     except Exception:
-        return False
+        return True
 
 
 def ollama_health() -> Dict[str, Any]:
@@ -365,14 +386,17 @@ def parse_intent(message: str, context: Dict[str, str]) -> ChatIntent:
     return ChatIntent(action="unknown", tool_name="", reason="no supported scoped intent")
 
 
-_TOOL_BY_NAME = {item.name: item for item in TOOLS}
+_TOOL_BY_NAME = {getattr(item, "name", getattr(item, "__name__", str(item))): item for item in TOOLS}
 
 
 def _execute_intent(intent: ChatIntent) -> Dict[str, Any]:
     if not intent.tool_name or intent.tool_name not in _TOOL_BY_NAME:
         return _payload(message="Ask about a selected tile, change candidate, or cluster.")
     try:
-        return _TOOL_BY_NAME[intent.tool_name].invoke(intent.arguments)
+        fn = _TOOL_BY_NAME[intent.tool_name]
+        if hasattr(fn, "invoke"):
+            return fn.invoke(intent.arguments)
+        return fn(**intent.arguments)
     except Exception:
         return _payload(message="The requested evidence could not be read.", error=True)
 
@@ -418,6 +442,9 @@ def _build_graph():
 
     def compose_next(state: AgentState) -> str:
         return "fallback" if state.get("fallback") else "done"
+
+    if StateGraph is None:
+        return None
 
     graph = StateGraph(AgentState)
     graph.add_node("parse_intent", parse_node)

@@ -62,6 +62,7 @@ services:
       DATABASE_URL: postgresql+psycopg2://terrex:terrex@postgres:5432/terrex
       PROCESSING_VERSION: terrex-mvp-0.1.0
     volumes:
+      - ./backend:/app
       - ./models:/models:ro
       - ./data:/data
     ports:

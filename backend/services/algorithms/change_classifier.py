@@ -10,8 +10,10 @@ Classifies detected change regions into the 4 PS-mandated classes:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Tuple
-import cv2
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 import numpy as np
 
 from services.algorithms.spectral import SpectralIndices, compute_spectral_deltas
@@ -51,7 +53,13 @@ def classify_change_regions(
         List of ChangeRegion instances with classification and rationale.
     """
     binary_mask = (change_mask > 0).astype(np.uint8)
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_mask, connectivity=8)
+    if cv2 is not None:
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_mask, connectivity=8)
+    else:
+        from scipy.ndimage import label
+        labels, num_features = label(binary_mask)
+        num_labels = num_features + 1
+        stats, centroids = None, None
 
     deltas = compute_spectral_deltas(before_indices, after_indices)
     d_ndvi = deltas["d_ndvi"]
@@ -61,17 +69,26 @@ def classify_change_regions(
     results: List[ChangeRegion] = []
 
     for label_id in range(1, num_labels):
-        area = int(stats[label_id, cv2.CC_STAT_AREA])
-        if area < min_region_size:
-            continue
-
-        x = int(stats[label_id, cv2.CC_STAT_LEFT])
-        y = int(stats[label_id, cv2.CC_STAT_TOP])
-        w = int(stats[label_id, cv2.CC_STAT_WIDTH])
-        h = int(stats[label_id, cv2.CC_STAT_HEIGHT])
-        cx, cy = float(centroids[label_id][0]), float(centroids[label_id][1])
-
         region_mask = (labels == label_id)
+        if stats is not None and cv2 is not None:
+            area = int(stats[label_id, cv2.CC_STAT_AREA])
+            if area < min_region_size:
+                continue
+            x = int(stats[label_id, cv2.CC_STAT_LEFT])
+            y = int(stats[label_id, cv2.CC_STAT_TOP])
+            w = int(stats[label_id, cv2.CC_STAT_WIDTH])
+            h = int(stats[label_id, cv2.CC_STAT_HEIGHT])
+            cx, cy = float(centroids[label_id][0]), float(centroids[label_id][1])
+        else:
+            area = int(region_mask.sum())
+            if area < min_region_size:
+                continue
+            y_indices, x_indices = np.where(region_mask)
+            if len(x_indices) == 0:
+                continue
+            x, y = int(x_indices.min()), int(y_indices.min())
+            w, h = int(x_indices.max() - x + 1), int(y_indices.max() - y + 1)
+            cx, cy = float(x_indices.mean()), float(y_indices.mean())
 
         mean_ndvi = float(d_ndvi[region_mask].mean())
         mean_ndwi = float(d_ndwi[region_mask].mean())
