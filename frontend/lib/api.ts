@@ -462,7 +462,7 @@ function getDemoSearchResults(query: string, filters: FilterState = {}): TextSea
     sensor: i % 2 === 0 ? "Sentinel-2 MSI" : "Landsat-8 OLI",
     quality_score: 0.94 - i * 0.02,
     cloud_fraction: 0.02 + i * 0.01,
-    thumbnail_path: null,
+    thumbnail_path: "https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=600&auto=format&fit=crop&q=80",
     embedding_model: "remoteclip-vit-b32",
     embedding_is_placeholder: false,
     classification_label: loc.type,
@@ -484,12 +484,12 @@ export function getDemoChangeResponse(lon: number, lat: number, dateFrom: string
     change_id: "chg-" + Math.floor(lon * 100) + "-" + Math.floor(lat * 100),
     before: {
       acquisition_date: dateFrom || "2024-05-20",
-      thumbnail_path: null,
+      thumbnail_path: "https://images.unsplash.com/photo-1581084324492-c8076f130f86?w=800&auto=format&fit=crop&q=80",
       sensor: "Sentinel-2 MSI",
     },
     after: {
       acquisition_date: dateTo || "2026-05-18",
-      thumbnail_path: null,
+      thumbnail_path: "https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=800&auto=format&fit=crop&q=80",
       sensor: "Sentinel-2 MSI",
     },
     change_score: 0.89,
@@ -563,13 +563,15 @@ export function getDemoSimilarClusters(centerLon: number, centerLat: number): Si
         {
           tile_id: "c1-site-1", scene_id: "s2-2026-01", lon: centerLon + 0.012, lat: centerLat + 0.010,
           similarity_score: 0.94, final_score: 0.93, score_breakdown: {}, acquisition_date: "2026-05-18",
-          sensor: "Sentinel-2", quality_score: 0.95, cloud_fraction: 0.02, thumbnail_path: null,
+          sensor: "Sentinel-2", quality_score: 0.95, cloud_fraction: 0.02,
+          thumbnail_path: "https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=600&auto=format&fit=crop&q=80",
           embedding_model: "remoteclip", embedding_is_placeholder: false, classification_label: "New Masonry Compound"
         },
         {
           tile_id: "c1-site-2", scene_id: "s2-2026-02", lon: centerLon + 0.018, lat: centerLat + 0.015,
           similarity_score: 0.91, final_score: 0.90, score_breakdown: {}, acquisition_date: "2026-05-18",
-          sensor: "Sentinel-2", quality_score: 0.93, cloud_fraction: 0.03, thumbnail_path: null,
+          sensor: "Sentinel-2", quality_score: 0.93, cloud_fraction: 0.03,
+          thumbnail_path: "https://images.unsplash.com/photo-1581084324492-c8076f130f86?w=600&auto=format&fit=crop&q=80",
           embedding_model: "remoteclip", embedding_is_placeholder: false, classification_label: "Industrial Foundation"
         }
       ]
