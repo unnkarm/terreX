@@ -16,6 +16,7 @@ export default function IngestPage() {
   const [sourceType, setSourceType] = useState<SourceType>("sentinel2");
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentFile, setCurrentFile] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<any | null>(null);
   const [selectedIndianAoi, setSelectedIndianAoi] = useState<"kolkata" | "delhi" | "bengaluru">("kolkata");
   const [providerResults, setProviderResults] = useState<EOProviderSearchResult[]>([]);
   const [isSearchingProvider, setIsSearchingProvider] = useState(false);
@@ -111,6 +112,7 @@ export default function IngestPage() {
   const handleStageIndianScene = async (item: EOProviderSearchResult) => {
     setIsProcessing(true);
     setLogs([]);
+    setMetrics(null);
     setCurrentFile(`${item.item_id}.tif`);
     addLog(`STAGING ${item.dataset_name} (${item.item_id}) INTO TERREX PIPELINE...`);
     simulateProgress(item.item_id);
@@ -128,13 +130,22 @@ export default function IngestPage() {
   const handleProcessIncoming = async () => {
     setIsProcessing(true);
     setLogs([]);
+    setMetrics(null);
     setCurrentFile("BATCH_INCOMING_GEOTIFFS.tif");
     addLog("INITIATING BATCH INGESTION FROM data/incoming/...");
     simulateProgress("BATCH_INCOMING");
 
     try {
       const res = await processIncoming();
-      addLog(`Processed ${res.processed.length} new scene(s).`);
+      setMetrics(res.metrics || null);
+      addLog(`SUCCESS: Processed ${res.processed.length} new scene(s).`);
+      if (res.metrics) addLog(`METRICS: ${res.metrics.tiles_created} created | ${res.metrics.tiles_skipped} skipped | ${res.metrics.tiles_discarded} discarded | ${res.metrics.elapsed_seconds}s`);
+      if (res.skipped?.length) addLog(`INCREMENTAL: Skipped ${res.skipped.length} already-indexed scene(s).`);
+      if (res.failed.length > 0) {
+        addLog(`WARNING: ${res.failed.length} scenes failed to process.`);
+        res.failed.forEach((f: any) => addLog(` -> ${f.file}: ${f.error}`));
+      }
+      addLog("Database indexing complete. Ready for grid query.");
     } catch (err: any) {
       addLog(`NOTICE: Using local simulated pipeline: ${err?.message || "Running in offline demo mode."}`);
     } finally {
@@ -145,13 +156,22 @@ export default function IngestPage() {
   const handleFileUpload = async (file: File) => {
     setIsProcessing(true);
     setLogs([]);
+    setMetrics(null);
     setCurrentFile(file.name);
     addLog(`INITIATING UPLOAD & PIPELINE FOR: ${file.name}`);
     simulateProgress(file.name);
 
     try {
-      await uploadFileAndIngest(file);
-      addLog(`File ${file.name} ingested successfully.`);
+      const res = await uploadFileAndIngest(file);
+      setMetrics({
+        tiles_created: res.created_tiles ?? res.tiles ?? 0,
+        tiles_skipped: res.skipped_tiles ?? 0,
+        tiles_discarded: res.discarded_tiles ?? 0,
+        elapsed_seconds: res.elapsed_seconds ?? 0,
+      });
+      addLog(`SUCCESS: Ingested scene ${res.scene_id} (${res.tiles} tiles created).`);
+      addLog(`METRICS: ${res.skipped_tiles || 0} skipped | ${res.discarded_tiles || 0} discarded | ${res.elapsed_seconds || 0}s`);
+      addLog("Database indexing complete. Ready for grid query.");
     } catch (err: any) {
       addLog(`NOTICE: Local offline ingestion complete: ${err?.message || "Air-gapped mode active."}`);
     } finally {
@@ -440,6 +460,15 @@ export default function IngestPage() {
                 </div>
               </div>
 
+              {metrics && (
+                <div className="grid grid-cols-2 gap-px border-t border-neutral-800 bg-neutral-800 mt-3 pt-1">
+                  <Metric label="TILES CREATED" value={metrics.tiles_created ?? 0} />
+                  <Metric label="TILES SKIPPED" value={metrics.tiles_skipped ?? 0} />
+                  <Metric label="TILES DISCARDED" value={metrics.tiles_discarded ?? 0} />
+                  <Metric label="ELAPSED" value={`${metrics.elapsed_seconds ?? 0}s`} />
+                </div>
+              )}
+
               {stageProgress.indexing === "complete" && (
                 <div className="pt-2">
                   <Link
@@ -475,5 +504,14 @@ export default function IngestPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="bg-black px-3 py-2">
+      <div className="font-mono text-[9px] uppercase tracking-wider text-neutral-600">{label}</div>
+      <div className="mt-1 font-mono text-sm text-emerald-400">{value}</div>
+    </div>
   );
 }

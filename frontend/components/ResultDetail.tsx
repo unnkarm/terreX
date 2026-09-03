@@ -9,22 +9,25 @@ import ChangeTimeline from "@/components/ChangeTimeline";
 import EvidencePanel from "@/components/EvidencePanel";
 import ProvenanceDrawer from "@/components/ProvenanceDrawer";
 import ExportModal from "@/components/ExportModal";
+import ChatPanel from "./ChatPanel";
 
 interface Props {
   result: SearchResult | null;
   onClose: () => void;
   onFindSimilar?: (result: SearchResult) => void;
+  onCitationClick?: (citationId: string) => void;
 }
 
 type SpectralLayer = "RGB" | "MASK" | "NDVI" | "NDWI" | "NDBI" | "CONFIDENCE";
 
-export default function ResultDetail({ result, onClose, onFindSimilar }: Props) {
+export default function ResultDetail({ result, onClose, onFindSimilar, onCitationClick }: Props) {
   const [dateFrom, setDateFrom] = useState("2024-05-20");
   const [dateTo, setDateTo] = useState("2026-05-18");
   const [change, setChange] = useState<ChangeDetectionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState<string | null>(null);
   const [analystNote, setAnalystNote] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
   const [activeLayers, setActiveLayers] = useState<Record<SpectralLayer, boolean>>({
     RGB: true,
     MASK: true,
@@ -75,7 +78,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
   const selectedRegion = change?.change_regions?.find((r) => r.region_id === selectedRegionId);
 
   return (
-    <div className="h-full overflow-y-auto p-4 space-y-4 text-xs font-sans bg-neutral-950 text-neutral-300">
+    <div className="relative h-full overflow-y-auto p-4 space-y-4 text-xs font-sans bg-neutral-950 text-neutral-300">
       {/* Header Bar */}
       <div className="flex items-start justify-between border-b border-neutral-800 pb-2.5">
         <div>
@@ -95,6 +98,21 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Ask AI Chat Toggle Button */}
+          <button
+            type="button"
+            onClick={() => setChatOpen((open) => !open)}
+            aria-expanded={chatOpen}
+            title={chatOpen ? "Hide chat" : "Ask about this evidence"}
+            className={`px-2 py-1 rounded border font-mono text-[10px] uppercase tracking-wider transition-colors ${
+              chatOpen
+                ? "border-blue-500/70 bg-blue-950/40 text-blue-300"
+                : "border-neutral-700 bg-neutral-900 text-blue-400 hover:border-blue-500 hover:bg-blue-950/40"
+            }`}
+          >
+            {chatOpen ? "Hide Chat" : "Ask AI"}
+          </button>
+
           <button
             onClick={() => setIsExportOpen(true)}
             className="p-1 rounded text-neutral-400 hover:text-cyan-400 hover:bg-neutral-900 transition-all text-xs"
@@ -112,6 +130,37 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
           </button>
         </div>
       </div>
+
+      {/* Floating AI Evidence Assistant Chat Panel */}
+      {chatOpen && (
+        <div className="rounded-md border border-blue-500/40 bg-neutral-950/95 shadow-[0_18px_45px_rgba(0,0,0,0.75)] backdrop-blur-xl mb-4">
+          <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.8)]" />
+              <h3 className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-300">Evidence Assistant</h3>
+            </div>
+            <span className="font-mono text-[9px] uppercase tracking-wider text-neutral-600">Scoped session</span>
+          </div>
+          <div className="p-2">
+            <ChatPanel
+              context={{
+                tile_id: result.tile_id,
+                change_id: change?.change_id,
+              }}
+              fallbackData={{
+                changeType: change?.dominant_change_type,
+                confidence: change?.confidence,
+                date1: dateFrom,
+                date2: dateTo,
+                maskState: change?.quality_score?.toString(),
+                sceneId: result.scene_id,
+                sensor: result.sensor || undefined,
+              }}
+              onCitationClick={onCitationClick}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Metadata KPI Grid */}
       <div className="grid grid-cols-3 gap-px bg-neutral-800 border border-neutral-800 rounded overflow-hidden font-mono">
@@ -157,7 +206,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
           <span className="text-xs font-bold text-white font-sans tracking-tight uppercase">
             Bitemporal Change <span className="text-neutral-400 font-light">Analysis</span>
           </span>
-          <span className="text-[9px] font-mono text-cyan-400">PRITHVI-EO</span>
+          <span className="text-[9px] font-mono text-cyan-400">SPECTRAL + AI</span>
         </div>
 
         <div className="flex items-center gap-2 font-mono text-[11px]">
@@ -170,7 +219,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
               className="w-full bg-black border border-neutral-700 focus:border-cyan-500 rounded px-2 py-1 text-neutral-200 text-[10px] outline-none"
             />
           </div>
-          <span className="text-neutral-600 font-bold self-end pb-1">→</span>
+          <span className="text-neutral-600 mt-3">&rarr;</span>
           <div className="flex-1">
             <span className="text-[9px] text-neutral-500 block mb-0.5">T1 (AFTER)</span>
             <input
@@ -187,7 +236,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
           disabled={loading}
           className="w-full py-2.5 rounded bg-white hover:bg-neutral-200 text-black font-sans font-semibold text-xs uppercase tracking-widest transition-all disabled:opacity-50 shadow-md"
         >
-          {loading ? "INITIALIZING SIAMESE ANALYSIS..." : "EXECUTE BITEMPORAL ANALYSIS"}
+          {loading ? "ANALYZING BITEMPORAL SPECTRAL DELTAS..." : "EXECUTE BITEMPORAL ANALYSIS"}
         </button>
       </div>
 
@@ -199,44 +248,40 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
         beforeDate={dateFrom}
         afterDate={dateTo}
         dominantChange={change?.dominant_change_type ?? result.classification_label ?? "CONSTRUCTION"}
-        confidence={change?.confidence ?? 0.89}
       />
 
-      {/* Multi-Layer Interactive Change Mask Toggles (Requirement 10) */}
-      <div className="space-y-2 p-3 bg-neutral-900/40 rounded border border-neutral-800 font-mono text-[10px]">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] uppercase tracking-wider text-neutral-400 font-bold">
-            SPECTRAL LAYERS (INTERACTIVE)
-          </span>
-          <span className="text-[9px] text-neutral-500">ISRO 2.2.2</span>
-        </div>
-
-        <div className="grid grid-cols-3 gap-1.5">
+      {/* Multi-Spectral Radiometric Layer Toggles */}
+      <div className="space-y-1.5">
+        <span className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 font-bold block">
+          SPECTRAL &amp; MASK LAYERS
+        </span>
+        <div className="grid grid-cols-3 gap-1.5 font-mono text-[10px]">
           <LayerToggle
-            label="Original RGB"
+            label="True Color (RGB)"
             active={activeLayers.RGB}
+            highlight="emerald"
             onClick={() => toggleLayer("RGB")}
           />
           <LayerToggle
             label="Change Mask"
             active={activeLayers.MASK}
-            highlight="emerald"
+            highlight="cyan"
             onClick={() => toggleLayer("MASK")}
           />
           <LayerToggle
-            label="Δ NDVI (Veg)"
+            label="ΔNDVI (Veg)"
             active={activeLayers.NDVI}
-            highlight="cyan"
+            highlight="emerald"
             onClick={() => toggleLayer("NDVI")}
           />
           <LayerToggle
-            label="Δ NDWI (Water)"
+            label="ΔNDWI (Water)"
             active={activeLayers.NDWI}
             highlight="cyan"
             onClick={() => toggleLayer("NDWI")}
           />
           <LayerToggle
-            label="Δ NDBI (Built)"
+            label="ΔNDBI (Build)"
             active={activeLayers.NDBI}
             highlight="amber"
             onClick={() => toggleLayer("NDBI")}
@@ -320,13 +365,13 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
         </div>
       )}
 
-      {/* Multi-temporal Change Timeline (Requirement 9) */}
+      {/* Multi-temporal Change Timeline */}
       <ChangeTimeline
         earliestDate={change?.earliest_supported_observation?.slice(0, 10) ?? "2024-09-14"}
         registrationConfidence={96}
       />
 
-      {/* Explainable AI Evidence Panel (Requirement 11) */}
+      {/* Explainable AI Evidence Panel */}
       <EvidencePanel
         reasons={change?.reasons}
         suppressionReasons={change?.suppression_reasons}
@@ -335,7 +380,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
         dNdbi={selectedRegion?.mean_d_ndbi ?? 0.42}
       />
 
-      {/* Analyst Decision Action Bar (Requirement 14) */}
+      {/* Analyst Decision Action Bar */}
       <div className="space-y-3 p-3.5 bg-neutral-900/50 rounded border border-neutral-800">
         <div className="flex items-center justify-between">
           <span className="text-xs font-bold text-white font-sans tracking-tight uppercase">

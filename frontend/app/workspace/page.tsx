@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import TopNav from "@/components/TopNav";
 import SearchBar from "@/components/SearchBar";
 import FilterBar from "@/components/FilterBar";
@@ -23,6 +24,7 @@ export default function WorkspacePage() {
   const [loading, setLoading] = useState(false);
   const [placeholderWarning, setPlaceholderWarning] = useState(false);
   const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [hasData, setHasData] = useState<boolean | null>(null);
   const [sensors, setSensors] = useState<string[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [isLeftOpen, setIsLeftOpen] = useState(true);
@@ -40,12 +42,18 @@ export default function WorkspacePage() {
   ], []);
 
   useEffect(() => {
-    getSystemStatus().then(setStatus).catch(() => setStatus(null));
+    getSystemStatus()
+      .then((systemStatus) => {
+        setStatus(systemStatus);
+        setHasData((systemStatus.vector_index_count ?? 0) > 0);
+      })
+      .catch(() => setStatus(null));
+
     listScenes()
       .then((scenes) => {
         setSensors(Array.from(new Set(scenes.map((s: any) => s.sensor).filter(Boolean))));
       })
-      .catch(() => {});
+      .catch(() => setSensors([]));
 
     // Initial search focused on Kolkata New Town
     runTextSearch("New buildings near water in New Town, Kolkata");
@@ -122,6 +130,25 @@ export default function WorkspacePage() {
     <main className="h-screen w-screen flex flex-col bg-black font-sans relative overflow-hidden select-none">
       {/* Top Navigation Bar */}
       <TopNav status={status} onExportClick={() => setIsExportOpen(true)} />
+
+      {/* Empty State Warning if vector index has no data */}
+      {hasData === false && (
+        <div className="absolute inset-0 z-[45] flex items-center justify-center bg-black/95 backdrop-blur-sm">
+          <div className="mx-5 w-full max-w-xl border border-neutral-800 bg-black/90 px-6 py-8 text-center shadow-[0_0_50px_rgba(0,0,0,0.8)] md:px-10 md:py-10">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center border border-emerald-500/50 bg-emerald-950/20 text-emerald-400">
+              <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+              </svg>
+            </div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-400">Vector Index Empty</p>
+            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white md:text-3xl">Ingest data to access the dashboard</h2>
+            <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-neutral-400">No satellite scenes are available in the local vector database yet. Add a scene to enable search, change detection, and evidence analysis.</p>
+            <Link href="/ingest" className="mt-7 inline-flex items-center gap-3 border border-emerald-400 bg-emerald-500 px-5 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.15em] text-black transition-colors hover:bg-emerald-300">
+              Add satellite data <span aria-hidden="true">&rarr;</span>
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Geospatial Intelligence Telemetry Bar */}
       <div className="w-full bg-neutral-950/90 border-b border-neutral-800/80 px-6 py-2 flex items-center justify-between z-40">
@@ -270,6 +297,10 @@ export default function WorkspacePage() {
             <ResultDetail
               result={selected}
               onClose={() => setSelected(null)}
+              onCitationClick={(citationId) => {
+                const cited = results.find((item) => item.tile_id === citationId);
+                if (cited) setSelected(cited);
+              }}
             />
           </div>
         )}

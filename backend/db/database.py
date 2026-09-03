@@ -2,6 +2,7 @@ from contextlib import contextmanager
 import logging
 
 from sqlalchemy import create_engine
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import sessionmaker
 
 try:
@@ -60,6 +61,29 @@ def init_db():
         except Exception as exc:
             logger.warning("Could not execute CREATE EXTENSION postgis: %s", exc)
     Base.metadata.create_all(bind=engine)
+    _ensure_ingestion_schema(engine)
+
+
+def _ensure_ingestion_schema(engine):
+    """Add v2 ingestion columns for databases created by an older checkout."""
+    additions = {
+        "scenes": {
+            "source_hash": "VARCHAR", "license_source": "VARCHAR", "cog_validation": "JSON",
+        },
+        "tiles": {
+            "quality_mask_path": "VARCHAR", "clear_fraction": "FLOAT", "quality_mask_summary": "JSON",
+            "radiometric_stats": "JSON", "spectral_indices": "JSON", "provenance": "JSON",
+            "embedding_model_version": "VARCHAR",
+        },
+    }
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table, columns in additions.items():
+            existing = {column["name"] for column in inspector.get_columns(table)} if inspector.has_table(table) else set()
+            for name, sql_type in columns.items():
+                if name in existing:
+                    continue
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
 
 @contextmanager

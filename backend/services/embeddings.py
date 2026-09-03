@@ -46,6 +46,7 @@ class EmbeddingResult:
     vector: np.ndarray
     model_name: str
     is_placeholder: bool
+    model_version: str = ""
 
 
 class _RealRemoteCLIP:
@@ -175,19 +176,29 @@ class EmbeddingService:
     def is_placeholder(self) -> bool:
         return self._real is None
 
+    @property
+    def model_version(self) -> str:
+        if self._real is None:
+            return "placeholder-visual-hash-v1"
+        try:
+            digest = hashlib.sha256(self._checkpoint_path.read_bytes()).hexdigest()[:16]
+            return f"{self._real.model_name}-{digest}"
+        except Exception:
+            return self._real.model_name
+
     def embed_text(self, text: str) -> EmbeddingResult:
         if self._real is not None:
             vec = self._real.embed_text(text)
-            return EmbeddingResult(vec, self._real.model_name, False)
+            return EmbeddingResult(vec, self._real.model_name, False, self.model_version)
         vec = self._placeholder.embed_text(text)
-        return EmbeddingResult(vec, self._placeholder.model_name, True)
+        return EmbeddingResult(vec, self._placeholder.model_name, True, self.model_version)
 
     def embed_image(self, image: Image.Image) -> EmbeddingResult:
         if self._real is not None:
             vec = self._real.embed_image(image)
-            return EmbeddingResult(vec, self._real.model_name, False)
+            return EmbeddingResult(vec, self._real.model_name, False, self.model_version)
         vec = self._placeholder.embed_image(image)
-        return EmbeddingResult(vec, self._placeholder.model_name, True)
+        return EmbeddingResult(vec, self._placeholder.model_name, True, self.model_version)
 
 
 # Singleton — model load is expensive, do it once per process.

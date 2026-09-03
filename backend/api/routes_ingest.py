@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -14,6 +15,8 @@ from db.database import get_db, get_session
 from db.models import Scene
 from services.ingestion import ingest_file, IngestionError
 from data_sources import list_available_sources, get_data_source
+from services.vector_store import vector_store
+
 
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
 
@@ -133,18 +136,29 @@ def process_incoming():
     Scan data/incoming/ for any *.tif/*.tiff not yet in the scenes table and
     ingest them independently — supports incremental indexing without a full rebuild.
     """
-    with get_session() as session:
-        already = {row[0] for row in session.execute(select(Scene.source_filename))}
-
-    processed, failed = [], []
+    started = time.perf_counter()
+    processed, skipped, failed = [], [], []
     for path in list(settings.INCOMING_DIR.glob("*.tif")) + list(settings.INCOMING_DIR.glob("*.tiff")):
-        if path.name in already:
-            continue
         try:
-            processed.append(ingest_file(path))
+            result = ingest_file(path)
+            (skipped if result.get("status") == "skipped" else processed).append(result)
         except IngestionError as exc:
             failed.append({"file": path.name, "error": str(exc)})
-    return {"processed": processed, "failed": failed}
+    return {
+        "processed": processed,
+        "skipped": skipped,
+        "failed": failed,
+        "metrics": {
+            "scenes_processed": len(processed),
+            "scenes_skipped": len(skipped),
+            "scenes_failed": len(failed),
+            "tiles_created": sum(r.get("created_tiles", r.get("tiles", 0)) for r in processed),
+            "tiles_skipped": sum(r.get("skipped_tiles", 0) for r in processed + skipped),
+            "tiles_discarded": sum(r.get("discarded_tiles", 0) for r in processed),
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+            "vector_index_count": vector_store.count(),
+        },
+    }
 
 
 @router.get("/scenes")
@@ -160,6 +174,9 @@ def list_scenes(db: Session = Depends(get_db)):
             "cloud_fraction": s.cloud_fraction,
             "status": s.status,
             "status_reason": s.status_reason,
+            "source_hash": s.source_hash,
+            "license_source": s.license_source,
+            "cog_validation": s.cog_validation,
             "processing_version": s.processing_version,
             "tile_count": len(s.tiles),
         }

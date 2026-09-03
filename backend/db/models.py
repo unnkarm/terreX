@@ -52,6 +52,9 @@ class Scene(Base):
     ingested_at = Column(DateTime, default=datetime.utcnow)
     status = Column(String, default="ingested")  # ingested | quarantined | failed
     status_reason = Column(Text, nullable=True)
+    source_hash = Column(String, nullable=True, index=True)
+    license_source = Column(String, nullable=True)
+    cog_validation = Column(JSON, nullable=True)
 
     tiles = relationship("Tile", back_populates="scene", cascade="all, delete-orphan")
 
@@ -86,6 +89,13 @@ class Tile(Base):
     embedding_is_placeholder = Column(Boolean, default=False)
 
     processing_version = Column(String, nullable=False)
+    quality_mask_path = Column(String, nullable=True)
+    clear_fraction = Column(Float, nullable=True)
+    quality_mask_summary = Column(JSON, nullable=True)
+    radiometric_stats = Column(JSON, nullable=True)
+    spectral_indices = Column(JSON, nullable=True)
+    provenance = Column(JSON, nullable=True)
+    embedding_model_version = Column(String, nullable=True)
 
     scene = relationship("Scene", back_populates="tiles")
 
