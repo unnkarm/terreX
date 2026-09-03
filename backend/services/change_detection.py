@@ -316,6 +316,8 @@ def run_change_detection(
             "quality_score": suppression.quality_score,
             "confidence": suppression.confidence,
             "change_area_m2": round(total_change_area_m2, 1),
+            "change_area_hectares": round(total_change_area_m2 / 10000.0, 2),
+            "change_summary": f"{round(total_change_area_m2 / 10000.0, 1)} hectares of {dominant_change_type.replace('_', ' ')} detected with {int(suppression.confidence * 100)}% confidence.",
             "change_mask_path": str(mask_path),
             "change_mask_url": f"/static/tiles/change_masks/{mask_filename}",
             "earliest_supported_observation": earliest_change_date.isoformat(),

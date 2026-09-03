@@ -3,13 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { SearchResult } from "@/lib/api";
+import { SearchResult, SimilarCluster } from "@/lib/api";
 
 interface Props {
   results: SearchResult[];
   selectedTileId: string | null;
   onSelect: (r: SearchResult) => void;
   center: [number, number];
+  isDrawingAoi?: boolean;
+  onAoiDrawn?: (bbox: [number, number, number, number]) => void;
+  activeCluster?: SimilarCluster | null;
 }
 
 type BasemapType = "satellite" | "dark" | "osm" | "offline";
@@ -28,7 +31,7 @@ const BASEMAP_STYLES: Record<BasemapType, maplibregl.StyleSpecification> = {
       },
     },
     layers: [
-      { id: "bg", type: "background", paint: { "background-color": "#0b1220" } },
+      { id: "bg", type: "background", paint: { "background-color": "#050505" } },
       { id: "satellite-layer", type: "raster", source: "esri-satellite", minzoom: 0, maxzoom: 19 },
     ],
   },
@@ -46,7 +49,7 @@ const BASEMAP_STYLES: Record<BasemapType, maplibregl.StyleSpecification> = {
       },
     },
     layers: [
-      { id: "bg", type: "background", paint: { "background-color": "#0b1220" } },
+      { id: "bg", type: "background", paint: { "background-color": "#050505" } },
       { id: "dark-layer", type: "raster", source: "carto-dark", minzoom: 0, maxzoom: 19 },
     ],
   },
@@ -61,7 +64,7 @@ const BASEMAP_STYLES: Record<BasemapType, maplibregl.StyleSpecification> = {
       },
     },
     layers: [
-      { id: "bg", type: "background", paint: { "background-color": "#0b1220" } },
+      { id: "bg", type: "background", paint: { "background-color": "#050505" } },
       { id: "osm-layer", type: "raster", source: "osm-tiles", minzoom: 0, maxzoom: 19 },
     ],
   },
@@ -69,16 +72,28 @@ const BASEMAP_STYLES: Record<BasemapType, maplibregl.StyleSpecification> = {
     version: 8,
     sources: {},
     layers: [
-      { id: "bg", type: "background", paint: { "background-color": "#0b1220" } },
+      { id: "bg", type: "background", paint: { "background-color": "#050505" } },
     ],
   },
 };
 
-export default function MapView({ results, selectedTileId, onSelect, center }: Props) {
+export default function MapView({
+  results,
+  selectedTileId,
+  onSelect,
+  center,
+  isDrawingAoi = false,
+  onAoiDrawn,
+  activeCluster,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
+  const clusterMarkersRef = useRef<Marker[]>([]);
   const [basemap, setBasemap] = useState<BasemapType>("satellite");
+  const [drawMode, setDrawMode] = useState<"none" | "box">("none");
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
 
   // Initialize Map
   useEffect(() => {
@@ -92,9 +107,6 @@ export default function MapView({ results, selectedTileId, onSelect, center }: P
       attributionControl: false,
     });
 
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "bottom-right");
-    map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-left");
-
     mapRef.current = map;
 
     return () => {
@@ -103,7 +115,7 @@ export default function MapView({ results, selectedTileId, onSelect, center }: P
     };
   }, []);
 
-  // Update style when basemap changes
+  // Switch basemap
   const switchBasemap = (type: BasemapType) => {
     setBasemap(type);
     if (mapRef.current) {
@@ -111,7 +123,64 @@ export default function MapView({ results, selectedTileId, onSelect, center }: P
     }
   };
 
-  // Re-render markers and fit bounds
+  // Zoom / Pan helpers
+  const handleZoomIn = () => mapRef.current?.zoomIn();
+  const handleZoomOut = () => mapRef.current?.zoomOut();
+  const handleResetCenter = () => {
+    mapRef.current?.flyTo({ center, zoom: 12, duration: 600 });
+  };
+
+  // Toggle Draw AOI
+  const toggleDrawMode = () => {
+    const next = drawMode === "box" ? "none" : "box";
+    setDrawMode(next);
+    if (mapRef.current) {
+      if (next === "box") {
+        mapRef.current.dragPan.disable();
+      } else {
+        mapRef.current.dragPan.enable();
+      }
+    }
+  };
+
+  // Drag box handlers for AOI creation
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (drawMode !== "box" || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    setDragStart(pt);
+    setDragCurrent(pt);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragStart || drawMode !== "box" || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    setDragCurrent({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  };
+
+  const handleMouseUp = () => {
+    if (!dragStart || !dragCurrent || drawMode !== "box" || !mapRef.current) {
+      setDragStart(null);
+      setDragCurrent(null);
+      return;
+    }
+
+    const map = mapRef.current;
+    const sw = map.unproject([Math.min(dragStart.x, dragCurrent.x), Math.max(dragStart.y, dragCurrent.y)]);
+    const ne = map.unproject([Math.max(dragStart.x, dragCurrent.x), Math.min(dragStart.y, dragCurrent.y)]);
+
+    const bbox: [number, number, number, number] = [sw.lng, sw.lat, ne.lng, ne.lat];
+    if (onAoiDrawn) {
+      onAoiDrawn(bbox);
+    }
+
+    setDragStart(null);
+    setDragCurrent(null);
+    setDrawMode("none");
+    map.dragPan.enable();
+  };
+
+  // Markers render
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -123,8 +192,8 @@ export default function MapView({ results, selectedTileId, onSelect, center }: P
       const isSelected = r.tile_id === selectedTileId;
       const el = document.createElement("div");
       el.className = "group relative flex items-center justify-center transition-transform hover:scale-125";
-      el.style.width = isSelected ? "24px" : "18px";
-      el.style.height = isSelected ? "24px" : "18px";
+      el.style.width = isSelected ? "26px" : "18px";
+      el.style.height = isSelected ? "26px" : "18px";
       el.style.cursor = "pointer";
 
       // Outer pulse halo for selected item
@@ -147,7 +216,7 @@ export default function MapView({ results, selectedTileId, onSelect, center }: P
       }`;
       el.appendChild(dot);
 
-      el.title = `${r.sensor ?? "Sentinel-2"} | Score: ${(r.final_score * 100).toFixed(0)}%`;
+      el.title = `${r.classification_label ?? "Observation"} | Score: ${(r.final_score * 100).toFixed(0)}%`;
       el.addEventListener("click", (e) => {
         e.stopPropagation();
         onSelect(r);
@@ -173,57 +242,123 @@ export default function MapView({ results, selectedTileId, onSelect, center }: P
     }
   }, [results, selectedTileId]);
 
+  // Cluster Markers render
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    clusterMarkersRef.current.forEach((m) => m.remove());
+    clusterMarkersRef.current = [];
+
+    if (activeCluster) {
+      const el = document.createElement("div");
+      el.className = "flex items-center justify-center p-2 rounded-full bg-cyan-500/30 border-2 border-cyan-400 shadow-[0_0_20px_#06b6d4] text-white font-mono text-[10px] font-bold";
+      el.style.width = "40px";
+      el.style.height = "40px";
+      el.innerText = String(activeCluster.count);
+
+      const marker = new maplibregl.Marker({ element: el, anchor: "center" })
+        .setLngLat(activeCluster.centroid)
+        .addTo(map);
+
+      clusterMarkersRef.current.push(marker);
+      map.flyTo({ center: activeCluster.centroid, zoom: 13, duration: 600 });
+    }
+  }, [activeCluster]);
+
   return (
-    <div className="relative w-full h-full">
+    <div
+      className="relative w-full h-full overflow-hidden select-none"
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+    >
       <div ref={containerRef} className="w-full h-full" />
 
-      {/* Basemap Switcher Tactical Overlay */}
-      <div className="absolute top-[80px] left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 p-1 rounded-sm bg-black/80 backdrop-blur-md border border-neutral-800 shadow-[0_0_15px_rgba(0,0,0,0.8)] text-[10px] font-mono tracking-widest uppercase">
-        <button
-          onClick={() => switchBasemap("satellite")}
-          className={`px-3 py-1.5 rounded-sm transition ${
-            basemap === "satellite"
-              ? "bg-emerald-950/40 text-emerald-400 border border-emerald-500/40 font-bold"
-              : "text-neutral-500 hover:text-emerald-500/70 border border-transparent"
-          }`}
-          title="High-resolution global satellite imagery"
+      {/* AOI Drag Drawing Box Overlay */}
+      {dragStart && dragCurrent && drawMode === "box" && (
+        <div
+          className="absolute border-2 border-dashed border-cyan-400 bg-cyan-500/20 pointer-events-none z-30"
+          style={{
+            left: Math.min(dragStart.x, dragCurrent.x),
+            top: Math.min(dragStart.y, dragCurrent.y),
+            width: Math.abs(dragCurrent.x - dragStart.x),
+            height: Math.abs(dragCurrent.y - dragStart.y),
+          }}
         >
-          [ SATELLITE ]
+          <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/80 font-mono text-[9px] text-cyan-400 font-bold">
+            AOI SELECTION
+          </span>
+        </div>
+      )}
+
+      {/* Floating Basemap Switcher */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 p-1 rounded bg-black/85 backdrop-blur-md border border-neutral-800 shadow-xl text-[10px] font-mono tracking-widest uppercase">
+        {(["satellite", "dark", "osm", "offline"] as BasemapType[]).map((type) => (
+          <button
+            key={type}
+            onClick={() => switchBasemap(type)}
+            className={`px-3 py-1 rounded transition-all ${
+              basemap === type
+                ? "bg-neutral-800 text-cyan-400 border border-cyan-500/50 font-bold"
+                : "text-neutral-400 hover:text-neutral-200 border border-transparent"
+            }`}
+          >
+            [ {type.toUpperCase()} ]
+          </button>
+        ))}
+      </div>
+
+      {/* Custom Map Controls HUD (Requirement 20) */}
+      <div className="absolute top-4 right-4 z-20 flex flex-col gap-1.5 bg-black/85 backdrop-blur-md p-1.5 rounded border border-neutral-800 shadow-xl font-mono text-xs">
+        <button
+          onClick={handleZoomIn}
+          className="w-8 h-8 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white flex items-center justify-center border border-neutral-800"
+          title="Zoom In"
+        >
+          +
         </button>
         <button
-          onClick={() => switchBasemap("dark")}
-          className={`px-3 py-1.5 rounded-sm transition ${
-            basemap === "dark"
-              ? "bg-cyan-950/40 text-cyan-400 border border-cyan-500/40 font-bold"
-              : "text-neutral-500 hover:text-cyan-500/70 border border-transparent"
-          }`}
-          title="CARTO dark tactical basemap"
+          onClick={handleZoomOut}
+          className="w-8 h-8 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white flex items-center justify-center border border-neutral-800"
+          title="Zoom Out"
         >
-          [ TACTICAL ]
+          −
         </button>
         <button
-          onClick={() => switchBasemap("osm")}
-          className={`px-3 py-1.5 rounded-sm transition ${
-            basemap === "osm"
-              ? "bg-blue-950/40 text-blue-400 border border-blue-500/40 font-bold"
-              : "text-neutral-500 hover:text-blue-500/70 border border-transparent"
-          }`}
-          title="OpenStreetMap street and boundary map"
+          onClick={handleResetCenter}
+          className="w-8 h-8 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-cyan-400 flex items-center justify-center border border-neutral-800"
+          title="Reset Center"
         >
-          [ STREETS ]
+          ⌖
+        </button>
+        <div className="w-full h-px bg-neutral-800 my-0.5" />
+        <button
+          onClick={toggleDrawMode}
+          className={`w-8 h-8 rounded flex items-center justify-center transition-all border ${
+            drawMode === "box"
+              ? "bg-cyan-950 text-cyan-400 border-cyan-500 font-bold shadow-[0_0_10px_#06b6d4]"
+              : "bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-cyan-400 border-neutral-800"
+          }`}
+          title="Draw Area of Interest (AOI)"
+        >
+          ◇
         </button>
         <button
-          onClick={() => switchBasemap("offline")}
-          className={`px-3 py-1.5 rounded-sm transition ${
-            basemap === "offline"
-              ? "bg-neutral-800 text-neutral-200 border border-neutral-600 font-bold"
-              : "text-neutral-500 hover:text-neutral-400 border border-transparent"
-          }`}
-          title="Strict offline air-gapped grid"
+          onClick={toggleDrawMode}
+          className="w-8 h-8 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-emerald-400 flex items-center justify-center border border-neutral-800"
+          title="Polygon Extent"
         >
-          [ OFFLINE ]
+          ⬡
         </button>
       </div>
+
+      {/* AOI Active Notification */}
+      {drawMode === "box" && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 px-4 py-1.5 rounded-full bg-cyan-950/90 border border-cyan-500 text-cyan-300 font-mono text-[10px] tracking-wider uppercase shadow-lg animate-pulse">
+          Click and drag on the map to define bounding box AOI
+        </div>
+      )}
     </div>
   );
 }

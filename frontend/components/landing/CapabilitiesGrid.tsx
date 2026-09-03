@@ -57,13 +57,14 @@ export default function CapabilitiesGrid() {
       <div className="max-w-7xl mx-auto px-6 sm:px-8">
         
         <div className="space-y-3 mb-12">
-          <div className="text-xs font-sans uppercase tracking-widest text-neutral-500 font-medium">
-            Capabilities
+          <div className="font-mono text-xs text-radar font-semibold tracking-widest uppercase flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-radar animate-pulse" />
+            <span>CORE CAPABILITIES</span>
           </div>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight font-sans">
-            Engineered for precision intelligence.
+          <h2 className="text-3xl sm:text-5xl font-bold text-white tracking-tight font-sans leading-[1.1]">
+            Engineered for <span className="text-neutral-400 font-light">precision intelligence.</span>
           </h2>
-          <p className="text-neutral-400 max-w-xl text-sm font-sans font-light">
+          <p className="text-base text-neutral-300 max-w-xl font-sans font-light leading-relaxed">
             High-speed semantic search, sub-pixel change detection, and air-gapped security for geospatial analysts.
           </p>
         </div>

@@ -38,17 +38,17 @@ export default function Header() {
         </div>
 
         {/* Minimal Navigation Links (Inter / sans font) */}
-        <div className="hidden md:flex items-center gap-9">
-          <nav className="flex items-center gap-8 text-[11px] font-sans tracking-widest uppercase text-neutral-400 font-medium">
+        <div className="hidden md:flex items-center gap-7">
+          <nav className="flex items-center gap-6 text-[11px] font-sans tracking-widest uppercase text-neutral-400 font-medium">
             <a href="#technology" className="hover:text-white transition duration-150">
               TECHNOLOGY
             </a>
             <a href="#simulator" className="hover:text-white transition duration-150">
               SIMULATOR
             </a>
-            <a href="#specs" className="hover:text-white transition duration-150">
-              ISRO SPEC
-            </a>
+            <Link href="/ingest" className="hover:text-white transition duration-150">
+              INGESTION
+            </Link>
           </nav>
 
           {/* Launch Console Button (Thin outline box matching reference image) */}

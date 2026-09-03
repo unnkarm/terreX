@@ -11,17 +11,17 @@ export default function Footer() {
         {/* Top Callout */}
         <div className="bg-neutral-950 border border-neutral-800 p-8 rounded flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="space-y-1 text-center md:text-left">
-            <h3 className="text-xl sm:text-2xl font-bold text-white">
-              Launch TerreX Console
+            <h3 className="text-xl sm:text-3xl font-bold tracking-tight text-white font-sans">
+              Launch TerreX <span className="text-neutral-400 font-light">console.</span>
             </h3>
-            <p className="text-neutral-400 text-xs sm:text-sm font-light">
-              Start querying and comparing air-gapped satellite scenes.
+            <p className="text-neutral-300 text-sm font-sans font-light">
+              Start querying and comparing air-gapped satellite scenes with zero cloud egress.
             </p>
           </div>
 
           <Link
             href="/workspace"
-            className="px-8 py-3 bg-white text-black font-semibold text-xs tracking-widest uppercase hover:bg-neutral-200 transition"
+            className="px-8 py-3.5 bg-white text-black font-sans font-semibold text-xs tracking-widest uppercase hover:bg-neutral-200 transition"
           >
             LAUNCH WORKSPACE
           </Link>
@@ -33,17 +33,20 @@ export default function Footer() {
             <div className="flex items-center gap-2">
               <Logo size={32} showText={true} />
             </div>
-            <p className="text-[11px] text-neutral-500 font-light leading-relaxed">
+            <p className="text-[11px] text-neutral-400 font-sans font-light leading-relaxed">
               Offline satellite intelligence and change detection for defense analysts.
             </p>
           </div>
 
           <div className="space-y-2">
-            <div className="text-white font-semibold uppercase tracking-wider text-[11px]">PLATFORM</div>
-            <ul className="space-y-1 text-neutral-400 text-[11px]">
-              <li><a href="#technology" className="hover:text-white transition">Technology</a></li>
-              <li><a href="#simulator" className="hover:text-white transition">Simulator</a></li>
-              <li><a href="#specs" className="hover:text-white transition">Specifications</a></li>
+            <div className="text-white font-semibold uppercase tracking-wider text-[11px]">CONSOLES</div>
+            <ul className="space-y-1 text-neutral-400 text-[11px] font-sans">
+              <li><Link href="/workspace" className="hover:text-white transition">Workspace</Link></li>
+              <li><Link href="/dashboard" className="hover:text-white transition">Dashboard</Link></li>
+              <li><Link href="/changes" className="hover:text-white transition">Change Scanner</Link></li>
+              <li><Link href="/review" className="hover:text-white transition">Review Queue</Link></li>
+              <li><Link href="/data" className="hover:text-white transition">Data Catalog</Link></li>
+              <li><Link href="/system" className="hover:text-white transition">System Status</Link></li>
             </ul>
           </div>
 

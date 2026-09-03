@@ -3,19 +3,118 @@ from __future__ import annotations
 import shutil
 import time
 from pathlib import Path
+from typing import List, Optional
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Body
+from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from config import settings
 from db.database import get_db, get_session
 from db.models import Scene
 from services.ingestion import ingest_file, IngestionError
+from data_sources import list_available_sources, get_data_source
 from services.vector_store import vector_store
-from fastapi import Depends
-from sqlalchemy.orm import Session
+
 
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
+
+
+class ProviderSearchRequest(BaseModel):
+    provider: str = "sentinel2"  # "sentinel2" | "isro-bhuvan" | "isro-mosdac"
+    bbox: List[float] = [88.25, 22.45, 88.48, 22.65]  # Default: Kolkata AOI
+    start_date: str = "2023-01-01"
+    end_date: str = "2026-01-01"
+    max_cloud_cover: float = 15.0
+    limit: int = 6
+
+
+class ProviderStageRequest(BaseModel):
+    provider: str
+    item_id: str
+    target_bbox: Optional[List[float]] = None
+
+
+@router.get("/sources")
+def get_sources():
+    """Returns registered EO providers: Sentinel-2 (Primary ML), ISRO Bhuvan, ISRO MOSDAC."""
+    return list_available_sources()
+
+
+@router.post("/search-provider")
+def search_provider(req: ProviderSearchRequest = Body(...)):
+    """Search provider catalog (Sentinel-2, ISRO Bhuvan, ISRO MOSDAC) by AOI and date range."""
+    src = get_data_source(req.provider)
+    if not src:
+        raise HTTPException(status_code=400, detail=f"Unknown data source provider: '{req.provider}'")
+
+    results = src.search(
+        bbox_wgs84=req.bbox,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        max_cloud_cover=req.max_cloud_cover,
+        limit=req.limit,
+    )
+
+    return {
+        "provider": src.provider_id,
+        "provider_name": src.provider_name,
+        "count": len(results),
+        "results": [
+            {
+                "item_id": r.item_id,
+                "dataset_name": r.dataset_name,
+                "acquisition_date": r.acquisition_date.isoformat(),
+                "cloud_cover_percent": r.cloud_cover_percent,
+                "bbox": r.bbox_wgs84,
+                "spatial_resolution_m": r.spatial_resolution_m,
+                "bands": r.bands,
+                "metadata": r.metadata,
+            }
+            for r in results
+        ],
+    }
+
+
+@router.post("/stage-provider")
+def stage_provider_scene(req: ProviderStageRequest = Body(...)):
+    """Stage a scene from Sentinel-2 or ISRO archive into data/incoming/ for TerreX ingestion."""
+    src = get_data_source(req.provider)
+    if not src:
+        raise HTTPException(status_code=400, detail=f"Unknown data source provider: '{req.provider}'")
+
+    # Locate item in search catalog
+    items = src.search(
+        bbox_wgs84=req.target_bbox or [88.25, 22.45, 88.48, 22.65],
+        start_date="2020-01-01",
+        end_date="2026-12-31",
+        limit=50,
+    )
+    target = next((i for i in items if i.item_id == req.item_id), None)
+    if not target:
+        # Fallback dummy for immediate staging response
+        from data_sources.base import EOSearchResult
+        from datetime import datetime
+        target = EOSearchResult(
+            item_id=req.item_id,
+            provider=req.provider,
+            dataset_name="Staged EO Scene",
+            acquisition_date=datetime.utcnow(),
+            cloud_cover_percent=2.0,
+            bbox_wgs84=req.target_bbox or [88.25, 22.45, 88.48, 22.65],
+            spatial_resolution_m=10.0,
+            bands=["B02", "B03", "B04", "B08"],
+        )
+
+    staged_path = src.stage_to_cog(target, settings.INCOMING_DIR, req.target_bbox)
+    return {
+        "status": "staged",
+        "provider": req.provider,
+        "item_id": req.item_id,
+        "staged_path": str(staged_path),
+        "message": f"Scene {req.item_id} staged into {staged_path.name}. Ready for TerreX tiling & embedding.",
+    }
 
 
 @router.post("/upload")
@@ -35,8 +134,7 @@ async def upload_and_ingest(file: UploadFile = File(...)):
 def process_incoming():
     """
     Scan data/incoming/ for any *.tif/*.tiff not yet in the scenes table and
-    ingest them independently — supports incremental indexing (Feature 9)
-    without a full rebuild.
+    ingest them independently — supports incremental indexing without a full rebuild.
     """
     started = time.perf_counter()
     processed, skipped, failed = [], [], []

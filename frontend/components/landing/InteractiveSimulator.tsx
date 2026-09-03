@@ -110,13 +110,14 @@ export default function InteractiveSimulator() {
         
         {/* Minimal Section Header */}
         <div className="space-y-3 mb-12">
-          <div className="text-xs font-sans uppercase tracking-widest text-neutral-500 font-medium">
-            Interactive Search &amp; Change Detection
+          <div className="font-mono text-xs text-radar font-semibold tracking-widest uppercase flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-radar animate-pulse" />
+            <span>INTERACTIVE SIMULATOR</span>
           </div>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight font-sans">
-            Natural language query to verified change.
+          <h2 className="text-3xl sm:text-5xl font-bold text-white tracking-tight font-sans leading-[1.1]">
+            Natural language query to <span className="text-neutral-400 font-light">verified change.</span>
           </h2>
-          <p className="text-neutral-400 max-w-2xl text-sm font-sans font-light">
+          <p className="text-base text-neutral-300 max-w-2xl font-sans font-light leading-relaxed">
             Search imagery across dates, detect bi-temporal modifications, and suppress false alarms on-prem.
           </p>
         </div>
