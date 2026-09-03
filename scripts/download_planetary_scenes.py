@@ -183,35 +183,41 @@ def fetch_and_save_geotiff(
 def main():
     parser = argparse.ArgumentParser(description="Download real Sentinel-2 GeoTIFFs from Planetary Computer.")
     parser.add_argument(
+        "--preset",
+        choices=["kolkata", "delhi"],
+        default="kolkata",
+        help="Predefined geographic AOI (default: kolkata)",
+    )
+    parser.add_argument(
         "--bbox",
         nargs=4,
         type=float,
-        default=[77.18, 28.52, 77.32, 28.66],
-        help="AOI bounding box: min_lon min_lat max_lon max_lat (default: Delhi/Yamuna demo AOI)",
+        default=None,
+        help="AOI bounding box: min_lon min_lat max_lon max_lat (overrides preset)",
     )
     parser.add_argument(
         "--dates",
         nargs=2,
-        default=["2023-01-01", "2024-05-01"],
-        help="Start and end date in YYYY-MM-DD format",
+        default=None,
+        help="Start and end date in YYYY-MM-DD format (overrides preset)",
     )
     parser.add_argument(
         "--count",
         type=int,
-        default=2,
-        help="Number of scenes to fetch (default: 2)",
+        default=4,
+        help="Number of multi-temporal scenes to fetch across years (default: 4)",
     )
     parser.add_argument(
         "--max-cloud",
         type=float,
-        default=10.0,
-        help="Maximum cloud cover percentage (default: 10%%)",
+        default=15.0,
+        help="Maximum cloud cover percentage (default: 15%%)",
     )
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path(__file__).resolve().parent.parent / "data" / "incoming",
-        help="Destination directory (default: data/incoming/)",
+        default=None,
+        help="Destination directory (default: data/sentinel2/<preset>/ and data/incoming/)",
     )
     parser.add_argument(
         "--max-dim",
@@ -221,10 +227,29 @@ def main():
     )
 
     args = parser.parse_args()
-    date_str = f"{args.dates[0]}/{args.dates[1]}"
+
+    # Apply presets
+    PRESETS = {
+        "kolkata": {
+            "bbox": [88.25, 22.45, 88.48, 22.65],  # Hooghly river & urban expansion (~35 km²)
+            "dates": ["2023-01-01", "2026-01-01"],
+        },
+        "delhi": {
+            "bbox": [77.18, 28.52, 77.32, 28.66],  # Yamuna riverbank & construction
+            "dates": ["2023-01-01", "2024-06-01"],
+        },
+    }
+
+    selected_bbox = args.bbox or PRESETS[args.preset]["bbox"]
+    selected_dates = args.dates or PRESETS[args.preset]["dates"]
+    out_dir = args.out_dir or (Path(__file__).resolve().parent.parent / "data" / "incoming")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    date_str = f"{selected_dates[0]}/{selected_dates[1]}"
+    logger.info("Operating with preset '%s': BBox=%s, Window=%s", args.preset, selected_bbox, date_str)
 
     items = search_sentinel_scenes(
-        bbox=args.bbox,
+        bbox=selected_bbox,
         date_range=date_str,
         max_cloud_cover=args.max_cloud,
         limit=args.count,

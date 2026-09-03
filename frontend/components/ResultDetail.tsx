@@ -261,7 +261,9 @@ export default function ResultDetail({ result, onClose, onFindSimilar }: Props) 
         <div className="flex items-center justify-between">
           <span className="text-neutral-400">AFFECTED GROUND AREA:</span>
           <span className="text-white font-bold">
-            {(change?.change_area_m2 ?? 4820).toLocaleString()} m²
+            {change?.change_area_hectares
+              ? `${change.change_area_hectares} ha (${(change.change_area_m2 ?? 0).toLocaleString()} m²)`
+              : `${(change?.change_area_m2 ?? 4820).toLocaleString()} m²`}
           </span>
         </div>
         <div className="flex items-center justify-between">

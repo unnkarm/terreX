@@ -24,11 +24,11 @@ export default function SearchBar({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const suggestions = [
-    "Newly built structures near a river",
-    "Large vehicle concentrations",
-    "Road expansion & corridor development",
-    "Cleared vegetation near settlements",
-    "Water extent changes & reservoir shrinkage",
+    "New buildings near water in New Town, Kolkata",
+    "Dense urban development in Rajarhat Action Area",
+    "Urban expansion & roads in Bengaluru outskirts",
+    "Industrial development in Ahmedabad",
+    "Highways & construction along Yamuna corridor",
   ];
 
   const handleRunQuery = (text: string) => {

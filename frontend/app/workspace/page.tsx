@@ -29,6 +29,16 @@ export default function WorkspacePage() {
   const [isRightOpen, setIsRightOpen] = useState(true);
   const [isExportOpen, setIsExportOpen] = useState(false);
 
+  const [customCenter, setCustomCenter] = useState<[number, number] | null>([88.4754, 22.5867]); // Default Kolkata New Town
+
+  const INDIAN_LOCATIONS = useMemo(() => [
+    { id: "kolkata", name: "Kolkata (New Town)", coords: [88.4754, 22.5867] as [number, number], query: "New buildings near water in New Town, Kolkata" },
+    { id: "delhi", name: "Delhi NCR (Yamuna)", coords: [77.2912, 28.5684] as [number, number], query: "Highways & construction along Yamuna corridor" },
+    { id: "bengaluru", name: "Bengaluru (Outskirts)", coords: [77.6602, 12.8452] as [number, number], query: "Urban expansion & roads in Bengaluru outskirts" },
+    { id: "ahmedabad", name: "Ahmedabad (Sabarmati)", coords: [72.5714, 23.0225] as [number, number], query: "Industrial development in Ahmedabad" },
+    { id: "mumbai", name: "Mumbai (Coastal)", coords: [72.8777, 19.0760] as [number, number], query: "Dense coastal construction in Mumbai" },
+  ], []);
+
   useEffect(() => {
     getSystemStatus().then(setStatus).catch(() => setStatus(null));
     listScenes()
@@ -37,8 +47,8 @@ export default function WorkspacePage() {
       })
       .catch(() => {});
 
-    // Initial search to populate candidate grid
-    runTextSearch("Newly built structures near a river");
+    // Initial search focused on Kolkata New Town
+    runTextSearch("New buildings near water in New Town, Kolkata");
   }, []);
 
   const runTextSearch = useCallback(async (query: string) => {
@@ -76,38 +86,52 @@ export default function WorkspacePage() {
     }
   }, [filters]);
 
+  const handleSelectIndianLocation = useCallback((loc: typeof INDIAN_LOCATIONS[0]) => {
+    setCustomCenter(loc.coords);
+    const delta = 0.05;
+    const bbox: [number, number, number, number] = [
+      loc.coords[0] - delta,
+      loc.coords[1] - delta,
+      loc.coords[0] + delta,
+      loc.coords[1] + delta,
+    ];
+    setFilters((prev) => ({ ...prev, bbox }));
+    runTextSearch(loc.query);
+  }, [runTextSearch]);
+
   const handleAoiDrawn = useCallback((bbox: [number, number, number, number]) => {
     const updated = { ...filters, bbox };
     setFilters(updated);
-    runTextSearch("Newly built structures near a river");
+    runTextSearch("New buildings near water in New Town, Kolkata");
   }, [filters, runTextSearch]);
 
   const handleClearBbox = useCallback(() => {
     const updated = { ...filters, bbox: undefined };
     setFilters(updated);
-    runTextSearch("Newly built structures near a river");
+    runTextSearch("New buildings near water in New Town, Kolkata");
   }, [filters, runTextSearch]);
 
   const center: [number, number] = useMemo(() => {
     if (selected) return [selected.lon, selected.lat];
+    if (customCenter) return customCenter;
     if (results.length > 0) return [results[0].lon, results[0].lat];
-    return [77.2912, 28.5684]; // Yamuna Riverbank demo AOI
-  }, [selected, results.length]);
+    return [88.4754, 22.5867]; // Kolkata New Town AOI
+  }, [selected, customCenter, results]);
 
   return (
     <main className="h-screen w-screen flex flex-col bg-black font-sans relative overflow-hidden select-none">
       {/* Top Navigation Bar */}
       <TopNav status={status} onExportClick={() => setIsExportOpen(true)} />
 
-      {/* Geospatial Intelligence Telemetry Bar (Focused MVP) */}
+      {/* Geospatial Intelligence Telemetry Bar */}
       <div className="w-full bg-neutral-950/90 border-b border-neutral-800/80 px-6 py-2 flex items-center justify-between z-40">
         <div className="flex items-center gap-3">
           <span className="text-[10px] font-mono text-radar font-semibold uppercase tracking-widest flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-radar animate-pulse" />
-            PRIMARY SENSOR:
+            INDIAN EO PIPELINE:
           </span>
           <span className="px-2 py-0.5 rounded bg-neutral-900 border border-neutral-700 text-cyan-400 font-mono text-[10px] font-bold">
-            SENTINEL-2 MSI (10M GSD)
+            SENTINEL-2 + ISRO BHUVAN / MOSDAC
           </span>
           <span className="hidden md:inline-block text-[10px] text-neutral-500 font-mono">
             &middot; EPSG:32645 (UTM 45N)
@@ -117,6 +141,34 @@ export default function WorkspacePage() {
         <div className="flex items-center gap-4 text-[10px] font-mono text-neutral-400">
           <span>COORDINATES: <strong className="text-white">{center[1].toFixed(4)}°N, {center[0].toFixed(4)}°E</strong></span>
           <span className="hidden sm:inline-block">CANDIDATES: <strong className="text-emerald-400">{results.length}</strong></span>
+        </div>
+      </div>
+
+      {/* Indian AOI Location Fast Selector */}
+      <div className="w-full bg-black/95 border-b border-neutral-800/80 px-6 py-1.5 flex items-center justify-between gap-2 overflow-x-auto text-[10px] font-mono z-40">
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <span className="text-neutral-500 uppercase tracking-wider font-bold flex items-center gap-1">
+            <span className="text-amber-500">🇮🇳</span> TARGET AOI:
+          </span>
+          {INDIAN_LOCATIONS.map((loc) => {
+            const isCurrent = Math.abs(center[0] - loc.coords[0]) < 0.05 && Math.abs(center[1] - loc.coords[1]) < 0.05;
+            return (
+              <button
+                key={loc.id}
+                onClick={() => handleSelectIndianLocation(loc)}
+                className={`px-2.5 py-1 rounded transition-all tracking-wider uppercase font-semibold ${
+                  isCurrent
+                    ? "bg-amber-500/20 border border-amber-500/80 text-amber-300 shadow-sm"
+                    : "bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700"
+                }`}
+              >
+                {loc.name}
+              </button>
+            );
+          })}
+        </div>
+        <div className="hidden lg:flex items-center gap-2 text-neutral-500 text-[9px]">
+          <span>INDIAN EO INTEGRATION: BHUVAN LISS-III &middot; MOSDAC API &middot; SENTINEL-2 L2A</span>
         </div>
       </div>
 

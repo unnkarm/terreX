@@ -56,6 +56,8 @@ export interface ChangeDetectionResponse {
   quality_score?: number;
   confidence?: number;
   change_area_m2?: number;
+  change_area_hectares?: number;
+  change_summary?: string;
   change_mask_path?: string;
   change_mask_url?: string;
   earliest_supported_observation?: string;
@@ -677,4 +679,80 @@ function getDemoScenes() {
     },
   ];
 }
+
+export interface EOProvider {
+  id: string;
+  name: string;
+  description: string;
+  role: string;
+}
+
+export interface EOProviderSearchResult {
+  item_id: string;
+  dataset_name: string;
+  acquisition_date: string;
+  cloud_cover_percent: number;
+  bbox: [number, number, number, number];
+  spatial_resolution_m: number;
+  bands: string[];
+  metadata?: any;
+}
+
+export async function getEOProviders(): Promise<EOProvider[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/ingest/sources`);
+    if (!res.ok) throw new Error("Failed to fetch sources");
+    return await res.json();
+  } catch {
+    return [
+      { id: "sentinel2", name: "Sentinel-2 Level-2A (ESA / Open Access)", description: "10m multispectral imagery. Primary high-frequency dataset.", role: "Primary ML" },
+      { id: "isro-bhuvan", name: "ISRO / NRSC Bhuvan (Indian EO Archive)", description: "Indian Resourcesat LISS-III (23.5m) and AWiFS.", role: "Indian EO National Archive" },
+      { id: "isro-mosdac", name: "ISRO MOSDAC (Satellite Data Portal)", description: "Official ISRO meteorological, oceanographic & terrestrial API.", role: "Indian EO National Archive" },
+    ];
+  }
+}
+
+export async function searchEOProvider(
+  provider: string,
+  bbox: [number, number, number, number],
+  startDate: string,
+  endDate: string,
+  maxCloud: number = 15
+): Promise<EOProviderSearchResult[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/ingest/search-provider`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, bbox, start_date: startDate, end_date: endDate, max_cloud_cover: maxCloud, limit: 6 }),
+    });
+    if (!res.ok) throw new Error("Search failed");
+    const data = await res.json();
+    return data.results;
+  } catch {
+    if (provider === "isro-mosdac") {
+      return [
+        { item_id: "MOSDAC_INSAT3D_KOLKATA_2024", dataset_name: "INSAT-3D Multispectral Imager (ISRO)", acquisition_date: "2024-04-12T06:00:00Z", cloud_cover_percent: 3.2, bbox, spatial_resolution_m: 1000, bands: ["VIS", "SWIR", "TIR1"], metadata: { orbit: "Geostationary (82°E)" } },
+        { item_id: "MOSDAC_OCM3_BENGAL_2024", dataset_name: "Oceansat-3 Ocean Colour Monitor (ISRO)", acquisition_date: "2024-03-15T05:30:00Z", cloud_cover_percent: 1.8, bbox, spatial_resolution_m: 360, bands: ["B1", "B2", "B3", "B8"], metadata: { application: "Hooghly Estuary & Coastal Sediment Plume" } },
+      ];
+    }
+    return [
+      { item_id: "RS2_LISS3_KOLKATA_2024", dataset_name: "Resourcesat-2 LISS-III (23.5m)", acquisition_date: "2024-03-10T05:15:30Z", cloud_cover_percent: 1.4, bbox, spatial_resolution_m: 23.5, bands: ["Green", "Red", "NIR", "SWIR"], metadata: { location_name: "Kolkata (New Town & Rajarhat expansion)" } },
+    ];
+  }
+}
+
+export async function stageEOProviderScene(
+  provider: string,
+  itemId: string,
+  targetBbox?: [number, number, number, number]
+): Promise<{ status: string; message: string; staged_path: string }> {
+  const res = await fetch(`${API_BASE}/api/ingest/stage-provider`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, item_id: itemId, target_bbox: targetBbox }),
+  });
+  if (!res.ok) throw new Error("Staging failed");
+  return await res.json();
+}
+
 
