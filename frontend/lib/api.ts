@@ -79,6 +79,43 @@ export interface SystemStatus {
     remoteclip: { staged: boolean; active_model: string };
     prithvi: { staged: boolean; active_model: string };
   };
+  chat_available?: boolean;
+  chat?: {
+    available: boolean;
+    model: string;
+    ram_available: boolean;
+    ollama_reachable: boolean;
+    model_available: boolean;
+    safe_threshold_gb: number;
+    error?: string | null;
+  };
+  vector_index_count?: number;
+  vector_index_empty?: boolean;
+  embedding_model_version?: string;
+  stored_embedding_model_versions?: string[];
+  embedding_version_warning?: boolean;
+}
+
+export interface ChatContext {
+  tile_id?: string;
+  change_id?: string;
+  cluster_id?: string;
+}
+
+export interface ChatCitation {
+  type: string;
+  id: string;
+  field?: string;
+}
+
+export interface ChatResponse {
+  response: string | null;
+  citations: ChatCitation[];
+  available?: boolean;
+  fallback?: boolean;
+  latency_ms?: number;
+  intent?: { action?: string; tool_name?: string; arguments?: Record<string, unknown> };
+  status?: SystemStatus["chat"];
 }
 
 export interface FilterState {
@@ -153,6 +190,16 @@ export async function processIncoming() {
   return res.json();
 }
 
+export interface IngestMetrics {
+  scenes_processed: number;
+  scenes_skipped: number;
+  scenes_failed: number;
+  tiles_created: number;
+  tiles_skipped: number;
+  tiles_discarded: number;
+  elapsed_seconds: number;
+}
+
 export async function uploadFileAndIngest(file: File) {
   const form = new FormData();
   form.append("file", file);
@@ -171,4 +218,17 @@ export function thumbnailUrl(path: string | null): string {
   const idx = normalized.indexOf(marker);
   const rel = idx >= 0 ? normalized.slice(idx + marker.length) : normalized.replace(/^data\//, "");
   return `${API_BASE}/static/${rel}`;
+}
+
+export async function sendChatMessage(message: string, context: ChatContext, conversationId?: string): Promise<ChatResponse> {
+  const res = await fetch(`${API_BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, context, conversation_id: conversationId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Chat request failed: ${res.status}`);
+  }
+  return res.json();
 }

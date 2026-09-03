@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from db.database import init_db
-from api import routes_search, routes_ingest, routes_change, routes_feedback, routes_system
+from api import routes_search, routes_ingest, routes_change, routes_feedback, routes_system, routes_chat
+from services.chat_agent import start_idle_unload_monitor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("terrex")
@@ -45,6 +46,7 @@ app.include_router(routes_ingest.router)
 app.include_router(routes_change.router)
 app.include_router(routes_feedback.router)
 app.include_router(routes_system.router)
+app.include_router(routes_chat.router)
 
 
 @app.on_event("startup")
@@ -56,6 +58,7 @@ def on_startup():
         logger.info("OFFLINE_MODE verified — strict air-gap guards active (HF, Transformers, PROJ).")
 
     init_db()
+    start_idle_unload_monitor()
     logger.info("TerreX backend ready. Model dir=%s Data dir=%s", settings.MODEL_DIR, settings.DATA_DIR)
 
 

@@ -12,6 +12,12 @@ Pillow==10.3.0
 scikit-learn==1.5.0
 python-multipart==0.0.9
 pydantic==2.7.1
+psutil==5.9.8
+requests==2.32.3
+python-dotenv==1.0.1
+langgraph==0.1.19
+langchain-community==0.2.7
+langchain-ollama==0.1.0
 
 # --- Optional heavy ML deps -------------------------------------------------
 # Only required if you stage real RemoteCLIP / Prithvi-EO weights (see
