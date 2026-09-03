@@ -13,6 +13,7 @@ export default function IngestPage() {
   const [activeTab, setActiveTab] = useState<Tab>("STATIC");
   const [isProcessing, setIsProcessing] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [metrics, setMetrics] = useState<any | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const addLog = (msg: string) => {
@@ -22,11 +23,15 @@ export default function IngestPage() {
   const handleProcessIncoming = async () => {
     setIsProcessing(true);
     setLogs([]);
+    setMetrics(null);
     addLog("INITIATING BATCH INGESTION FROM data/incoming/...");
     try {
       addLog("Scanning local directory for unprocessed GeoTIFFs...");
       const res = await processIncoming();
+      setMetrics(res.metrics || null);
       addLog(`SUCCESS: Processed ${res.processed.length} new scene(s).`);
+      if (res.metrics) addLog(`METRICS: ${res.metrics.tiles_created} created | ${res.metrics.tiles_skipped} skipped | ${res.metrics.tiles_discarded} discarded | ${res.metrics.elapsed_seconds}s`);
+      if (res.skipped?.length) addLog(`INCREMENTAL: Skipped ${res.skipped.length} already-indexed scene(s).`);
       if (res.failed.length > 0) {
         addLog(`WARNING: ${res.failed.length} scenes failed to process.`);
         res.failed.forEach((f: any) => addLog(` -> ${f.file}: ${f.error}`));
@@ -42,12 +47,15 @@ export default function IngestPage() {
   const handleFileUpload = async (file: File) => {
     setIsProcessing(true);
     setLogs([]);
+    setMetrics(null);
     addLog(`INITIATING UPLOAD & INGESTION FOR: ${file.name}`);
     try {
       addLog("Uploading file to server...");
       addLog("Extracting windowed chips & generating embeddings...");
       const res = await uploadFileAndIngest(file);
+      setMetrics({ tiles_created: res.created_tiles ?? res.tiles ?? 0, tiles_skipped: res.skipped_tiles ?? 0, tiles_discarded: res.discarded_tiles ?? 0, elapsed_seconds: res.elapsed_seconds ?? 0 });
       addLog(`SUCCESS: Ingested scene ${res.scene_id} (${res.tiles} tiles created).`);
+      addLog(`METRICS: ${res.skipped_tiles || 0} skipped | ${res.discarded_tiles || 0} discarded | ${res.elapsed_seconds || 0}s`);
       addLog(`Avg Quality: ${res.quality_score} | Cloud Fraction: ${res.cloud_fraction}`);
       addLog("Database indexing complete. Ready for grid query.");
     } catch (err: any) {
@@ -186,6 +194,15 @@ export default function IngestPage() {
                 </div>
               )}
             </div>
+
+            {metrics && (
+              <div className="grid grid-cols-2 gap-px border-t border-neutral-800 bg-neutral-800">
+                <Metric label="TILES CREATED" value={metrics.tiles_created ?? 0} />
+                <Metric label="TILES SKIPPED" value={metrics.tiles_skipped ?? 0} />
+                <Metric label="TILES DISCARDED" value={metrics.tiles_discarded ?? 0} />
+                <Metric label="ELAPSED" value={`${metrics.elapsed_seconds ?? 0}s`} />
+              </div>
+            )}
             
             {/* Proceed Button (Enabled only if logs indicate success and not processing) */}
             <div className="p-4 border-t border-neutral-800 bg-neutral-900/30">
@@ -203,4 +220,8 @@ export default function IngestPage() {
       </div>
     </main>
   );
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return <div className="bg-black px-3 py-2"><div className="font-mono text-[9px] uppercase tracking-wider text-neutral-600">{label}</div><div className="mt-1 font-mono text-sm text-emerald-400">{value}</div></div>;
 }

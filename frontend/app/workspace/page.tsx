@@ -31,13 +31,17 @@ export default function WorkspacePage() {
   const [isDetailOpen, setIsDetailOpen] = useState(true);
 
   useEffect(() => {
-    getSystemStatus().then(setStatus).catch(() => setStatus(null));
+    getSystemStatus()
+      .then((systemStatus) => {
+        setStatus(systemStatus);
+        setHasData((systemStatus.vector_index_count ?? 0) > 0);
+      })
+      .catch(() => setStatus(null));
     listScenes()
       .then((scenes) => {
-        setHasData(scenes.length > 0);
         setSensors(Array.from(new Set(scenes.map((s: any) => s.sensor).filter(Boolean))));
       })
-      .catch(() => setHasData(false));
+      .catch(() => setSensors([]));
   }, []);
 
   const runTextSearch = async (query: string) => {
@@ -79,26 +83,27 @@ export default function WorkspacePage() {
     <main className="h-screen w-screen flex flex-col bg-black font-sans relative overflow-hidden">
       {/* Empty State Overlay */}
       {hasData === false && (
-        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-md scanlines">
-          <div className="flex flex-col items-center gap-6 p-10 border border-neutral-800 bg-black/80 shadow-[0_0_50px_rgba(0,0,0,1)] rounded-3xl max-w-lg text-center">
-            <svg className="w-16 h-16 text-emerald-500/50 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-            </svg>
-            <h2 className="text-2xl font-mono text-emerald-400 font-bold uppercase tracking-widest">Grid Offline</h2>
-            <p className="text-neutral-400 font-sans text-sm leading-relaxed">
-              The Vector Index is currently empty. No observation data is available for RAG queries. You must ingest satellite scenes into the system before proceeding.
-            </p>
-            <Link href="/ingest" className="px-8 py-3 bg-emerald-900/30 border border-emerald-500/50 hover:bg-emerald-800/60 hover:border-emerald-400 text-emerald-400 font-mono text-xs uppercase tracking-widest font-bold rounded-full transition-all mt-4 shadow-[0_0_20px_rgba(16,185,129,0.2)] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)]">
-              INITIALIZE INGESTION SEQUENCE →
-            </Link>
+        <div className="absolute inset-0 z-[45] flex items-center justify-center bg-black/95 backdrop-blur-sm scanlines">
+          <div className="mx-5 w-full max-w-xl border border-neutral-800 bg-black/90 px-6 py-8 text-center shadow-[0_0_50px_rgba(0,0,0,0.8)] md:px-10 md:py-10">
+            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center border border-emerald-500/50 bg-emerald-950/20 text-emerald-400">
+              <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+              </svg>
+            </div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-400">Index empty</p>
+            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white md:text-3xl">Ingest data to access the dashboard</h2>
+            <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-neutral-400">No satellite scenes are available in the local vector database yet. Add a scene to enable search, change detection, and evidence chat.</p>
+            <Link href="/ingest" className="mt-7 inline-flex items-center gap-3 border border-emerald-400 bg-emerald-500 px-5 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.15em] text-black transition-colors hover:bg-emerald-300">Add satellite data <span aria-hidden="true">→</span></Link>
           </div>
         </div>
       )}
 
       {/* Full Bleed Map Background */}
-      <div className="absolute inset-0 z-0">
-        <MapView results={results} selectedTileId={selected?.tile_id ?? null} onSelect={setSelected} center={center} />
-      </div>
+      {hasData !== false && (
+        <div className="absolute inset-0 z-0">
+          <MapView results={results} selectedTileId={selected?.tile_id ?? null} onSelect={setSelected} center={center} />
+        </div>
+      )}
 
       {/* Floating Header */}
       <header className="absolute top-0 left-0 w-full flex items-center justify-between px-6 py-3 bg-black/60 backdrop-blur-md border-b border-neutral-800/80 z-50 shadow-md scanlines">
@@ -114,6 +119,11 @@ export default function WorkspacePage() {
         <div className="flex items-center gap-4 text-[10px] font-mono tracking-widest text-neutral-400 uppercase">
           {status && (
             <>
+              {status.embedding_version_warning && (
+                <span className="border border-amber-700/60 bg-amber-950/30 px-2 py-0.5 text-amber-400" title="Stored vectors were created with a different embedding model version">
+                  INDEX VERSION MISMATCH
+                </span>
+              )}
               <StatusPill label="RemoteCLIP" staged={status.models.remoteclip.staged} />
               <StatusPill label="Prithvi-EO" staged={status.models.prithvi.staged} />
               <span className="flex items-center gap-2 text-cyan-500 font-bold ml-2">
@@ -187,7 +197,7 @@ export default function WorkspacePage() {
       {/* Right Tactical Panel (Target Inspection) */}
       {selected && (
         <div 
-          className={`absolute top-[64px] right-4 bottom-4 w-[340px] z-40 flex flex-col gap-3 transition-transform duration-300 ease-in-out ${
+          className={`absolute top-[64px] right-4 bottom-4 w-[min(340px,calc(100vw-2rem))] z-40 flex flex-col gap-3 transition-transform duration-300 ease-in-out ${
             isDetailOpen ? "translate-x-0" : "translate-x-[360px]"
           }`}
         >
@@ -202,7 +212,14 @@ export default function WorkspacePage() {
           </button>
 
           <div className="flex-1 min-h-0 bg-black/90 backdrop-blur-xl border border-neutral-800 shadow-[0_0_30px_rgba(0,0,0,0.9)] rounded-2xl overflow-hidden flex flex-col">
-            <ResultDetail result={selected} onClose={() => setSelected(null)} />
+            <ResultDetail
+              result={selected}
+              onClose={() => setSelected(null)}
+              onCitationClick={(citationId) => {
+                const cited = results.find((item) => item.tile_id === citationId);
+                if (cited) setSelected(cited);
+              }}
+            />
           </div>
         </div>
       )}

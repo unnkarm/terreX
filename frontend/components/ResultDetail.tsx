@@ -4,18 +4,21 @@ import { useState } from "react";
 import {
   SearchResult, ChangeDetectionResponse, detectChange, submitFeedback, thumbnailUrl,
 } from "@/lib/api";
+import ChatPanel from "./ChatPanel";
 
 interface Props {
   result: SearchResult | null;
   onClose: () => void;
+  onCitationClick?: (citationId: string) => void;
 }
 
-export default function ResultDetail({ result, onClose }: Props) {
+export default function ResultDetail({ result, onClose, onCitationClick }: Props) {
   const [dateFrom, setDateFrom] = useState("2023-01-01");
   const [dateTo, setDateTo] = useState("2024-01-01");
   const [change, setChange] = useState<ChangeDetectionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   if (!result) {
     return (
@@ -46,22 +49,76 @@ export default function ResultDetail({ result, onClose }: Props) {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-4 space-y-4 text-xs font-sans scanlines">
+    <div className="relative h-full overflow-y-auto p-4 space-y-4 text-xs font-sans scanlines">
       {/* Header */}
-      <div className="flex items-start justify-between border-b border-neutral-800 pb-2">
-        <div>
-          <h2 className="text-sm font-semibold text-neutral-300 flex items-center gap-2 uppercase tracking-wide">
+      <div className="border-b border-neutral-800 pb-3">
+        <div className="flex items-start justify-between gap-3">
+          <h2 className="min-w-0 text-sm leading-tight font-semibold text-neutral-300 uppercase tracking-wide whitespace-nowrap">
             Target Inspection
-            <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-neutral-900 border border-neutral-700 text-neutral-400 font-mono tracking-wider">
-              {result.sensor ?? "EO"}
-            </span>
           </h2>
-          <p className="text-[11px] text-neutral-500 font-mono mt-1">
-            <span className="text-emerald-700 font-bold mr-1">{'>'}</span> {result.lat.toFixed(5)}°N, {result.lon.toFixed(5)}°E
+          <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setChatOpen((open) => !open)}
+            aria-expanded={chatOpen}
+            title={chatOpen ? "Hide chat" : "Ask about this evidence"}
+            className={`px-2 py-1 rounded-sm border font-mono text-[10px] uppercase tracking-wider transition-colors ${
+              chatOpen
+                ? "border-blue-500/70 bg-blue-950/40 text-blue-300"
+                : "border-neutral-700 bg-neutral-900 text-blue-400 hover:border-blue-500 hover:bg-blue-950/40"
+            }`}
+          >
+            {chatOpen ? "Hide chat" : "Ask about this"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close target inspection"
+            className="text-neutral-500 hover:text-red-500 transition-colors text-base font-mono"
+          >
+            ✕
+          </button>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mt-2 min-w-0">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-sm bg-neutral-900 border border-neutral-700 text-neutral-400 font-mono tracking-wider shrink-0">
+            {result.sensor ?? "EO"}
+          </span>
+          <p className="text-[11px] text-neutral-500 font-mono truncate">
+            <span className="text-emerald-700 font-bold mr-1">{'>'}</span>{result.lat.toFixed(5)}°N, {result.lon.toFixed(5)}°E
           </p>
         </div>
-        <button onClick={onClose} className="text-neutral-500 hover:text-red-500 transition-colors text-base font-mono">✕</button>
       </div>
+
+      {chatOpen && (
+        <div className="absolute top-[4.75rem] right-3 left-3 z-[60] rounded-md border border-blue-500/40 bg-neutral-950/95 shadow-[0_18px_45px_rgba(0,0,0,0.75)] backdrop-blur-xl">
+          <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.8)]" />
+              <h3 className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-300">Evidence Assistant</h3>
+            </div>
+            <span className="font-mono text-[9px] uppercase tracking-wider text-neutral-600">Scoped session</span>
+          </div>
+          <div className="p-2">
+            <ChatPanel
+              context={{
+                tile_id: result.tile_id,
+                change_id: change?.change_id,
+              }}
+              fallbackData={{
+                changeType: change?.dominant_change_type,
+                confidence: change?.confidence,
+                date1: dateFrom,
+                date2: dateTo,
+                maskState: change?.quality_score?.toString(),
+                sceneId: result.scene_id,
+                sensor: result.sensor || undefined,
+              }}
+              onCitationClick={onCitationClick}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Metadata Grid */}
       <div className="grid grid-cols-2 gap-px bg-neutral-800 border border-neutral-800 rounded-sm overflow-hidden">
@@ -264,6 +321,7 @@ export default function ResultDetail({ result, onClose }: Props) {
             </div>
           </div>
         )}
+
       </div>
     </div>
   );
