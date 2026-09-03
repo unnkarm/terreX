@@ -45,13 +45,14 @@ export default function SpecsComparison() {
       <div className="max-w-7xl mx-auto px-6 sm:px-8">
         
         <div className="space-y-3 mb-12">
-          <div className="text-xs font-sans uppercase tracking-widest text-neutral-500 font-medium">
-            System Specifications
+          <div className="font-mono text-xs text-radar font-semibold tracking-widest uppercase flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-radar animate-pulse" />
+            <span>SPECIFICATIONS</span>
           </div>
-          <h2 className="text-3xl sm:text-4xl font-bold text-white tracking-tight font-sans">
-            Air-gapped performance benchmark.
+          <h2 className="text-3xl sm:text-5xl font-bold text-white tracking-tight font-sans leading-[1.1]">
+            Air-gapped performance <span className="text-neutral-400 font-light">benchmark.</span>
           </h2>
-          <p className="text-neutral-400 max-w-xl text-sm font-sans font-light">
+          <p className="text-base text-neutral-300 max-w-xl font-sans font-light leading-relaxed">
             Engineered to remove the operational bottleneck of manual satellite tile analysis in secure environments.
           </p>
         </div>

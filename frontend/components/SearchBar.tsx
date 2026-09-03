@@ -1,46 +1,147 @@
 "use client";
 
-import { useRef, useState } from "react";
+import React, { useState, useRef } from "react";
+
+export type SearchMode = "semantic" | "image";
 
 interface Props {
-  onTextSearch: (query: string) => void;
+  onTextSearch: (q: string) => void;
   onImageSearch: (file: File) => void;
-  loading: boolean;
+  onModeChange?: (mode: SearchMode) => void;
+  activeMode?: SearchMode;
+  loading?: boolean;
 }
 
-export default function SearchBar({ onTextSearch, onImageSearch, loading }: Props) {
+export default function SearchBar({
+  onTextSearch,
+  onImageSearch,
+  onModeChange,
+  activeMode = "semantic",
+  loading,
+}: Props) {
   const [query, setQuery] = useState("");
+  const [isFocused, setIsFocused] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const suggestions = [
+    "Newly built structures near a river",
+    "Large vehicle concentrations",
+    "Road expansion & corridor development",
+    "Cleared vegetation near settlements",
+    "Water extent changes & reservoir shrinkage",
+  ];
+
+  const handleRunQuery = (text: string) => {
+    setQuery(text);
+    onTextSearch(text);
+    setIsFocused(false);
+  };
+
+  const modes: { id: SearchMode; label: string }[] = [
+    { id: "semantic", label: "Semantic Text" },
+    { id: "image", label: "Reference Chip" },
+  ];
+
   return (
-    <div className="relative flex items-center w-full bg-neutral-900/80 backdrop-blur-md border border-neutral-700/50 rounded-full shadow-lg p-1.5 transition-all focus-within:border-emerald-600/60 focus-within:ring-1 focus-within:ring-emerald-600/30">
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && query.trim() && onTextSearch(query.trim())}
-        placeholder='ENTER QUERY... E.G. "NEW BUILDINGS NEAR A RIVER"'
-        className="flex-1 bg-transparent border-none px-4 py-2 text-sm text-emerald-100 placeholder-neutral-500 focus:outline-none font-mono tracking-wide"
-      />
-      
-      <div className="flex items-center gap-2 pr-1">
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={loading}
-          className="p-2 rounded-full bg-neutral-800/50 hover:bg-neutral-700 border border-transparent hover:border-neutral-500 text-neutral-400 transition-all flex items-center justify-center disabled:opacity-50"
-          title="Upload Reference Image"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-        </button>
-        <button
-          onClick={() => query.trim() && onTextSearch(query.trim())}
-          disabled={loading}
-          className="px-4 py-2 rounded-full bg-emerald-900/40 border border-emerald-800/50 hover:bg-emerald-800/60 hover:border-emerald-500 text-emerald-400 text-[11px] uppercase tracking-widest font-mono font-bold transition-all disabled:opacity-50"
-        >
-          {loading ? "..." : "SEARCH ↵"}
-        </button>
+    <div className="flex flex-col gap-2.5 w-full bg-neutral-950 border border-neutral-800 rounded-lg p-3 font-sans text-xs">
+      {/* Search Mode Switcher (Semantic vs Image) */}
+      <div className="flex items-center gap-1 border-b border-neutral-800/80 pb-2">
+        {modes.map((m) => {
+          const isSelected = activeMode === m.id;
+          return (
+            <button
+              key={m.id}
+              onClick={() => onModeChange && onModeChange(m.id)}
+              className={`flex-1 py-1.5 px-2 rounded font-sans text-xs uppercase tracking-widest font-semibold transition-all text-center ${
+                isSelected
+                  ? "bg-white text-black shadow-sm"
+                  : "text-neutral-400 hover:text-neutral-200 border border-transparent"
+              }`}
+            >
+              {m.label}
+            </button>
+          );
+        })}
       </div>
 
+      {/* Mode Description / Prompt Header */}
+      <div className="flex items-center justify-between">
+        <span className="flex items-center gap-1.5 font-sans font-bold text-white tracking-tight text-xs">
+          <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          {activeMode === "semantic" ? (
+            <span>What are you <span className="text-neutral-400 font-light">looking for?</span></span>
+          ) : (
+            <span>Upload reference <span className="text-neutral-400 font-light">optical chip</span></span>
+          )}
+        </span>
+        <span className="text-[9px] font-mono text-neutral-500 uppercase tracking-wider">
+          REMOTECLIP &middot; SENTINEL-2
+        </span>
+      </div>
+
+      {/* Semantic Input */}
+      {activeMode === "semantic" && (
+        <div className="space-y-2.5">
+          <div className="relative flex items-center bg-black border border-neutral-800 rounded focus-within:border-white focus-within:ring-1 focus-within:ring-white/30 transition-all">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => setIsFocused(true)}
+              onKeyDown={(e) => e.key === "Enter" && query.trim() && handleRunQuery(query.trim())}
+              placeholder='e.g. "new buildings near a river"'
+              className="flex-1 bg-transparent px-3 py-2 text-xs text-white placeholder-neutral-500 outline-none font-sans font-light"
+            />
+
+            <button
+              onClick={() => query.trim() && handleRunQuery(query.trim())}
+              disabled={loading}
+              className="m-1 px-4 py-2 rounded bg-white text-black font-sans font-semibold text-xs tracking-widest uppercase hover:bg-neutral-200 transition-colors disabled:opacity-50 shadow-md"
+            >
+              {loading ? "SEARCHING..." : "SEARCH"}
+            </button>
+          </div>
+
+          {/* 1-Click Suggestions */}
+          <div className="space-y-1">
+            <span className="text-[9px] font-mono uppercase tracking-widest text-neutral-500 block">
+              SUGGESTED INTENTS (SENTINEL-2):
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {suggestions.map((s, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleRunQuery(s)}
+                  className="text-[10px] text-left px-2 py-1 rounded bg-neutral-900/80 border border-neutral-800/80 text-neutral-300 hover:text-white hover:border-neutral-600 transition-all font-sans font-light"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Search Mode */}
+      {activeMode === "image" && (
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          className="border-2 border-dashed border-neutral-800 hover:border-emerald-500/60 rounded p-6 text-center cursor-pointer transition-colors bg-black/40 group"
+        >
+          <svg className="w-8 h-8 text-neutral-600 group-hover:text-emerald-400 mx-auto mb-2 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <p className="font-sans text-xs text-white font-semibold uppercase tracking-wider">
+            Upload Optical Reference Chip
+          </p>
+          <p className="text-[10px] text-neutral-400 font-sans font-light mt-1">
+            PNG, JPEG, or Sentinel-2 GeoTIFF / COG
+          </p>
+        </div>
+      )}
+
+      {/* Hidden File Input */}
       <input
         ref={fileInputRef}
         type="file"

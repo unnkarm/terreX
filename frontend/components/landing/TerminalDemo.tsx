@@ -86,12 +86,13 @@ export default function TerminalDemo() {
       <div className="max-w-7xl mx-auto px-6 sm:px-8">
         
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-4">
-          <div className="space-y-2">
-            <div className="text-xs font-sans uppercase tracking-widest text-neutral-500 font-medium">
-              Developer Interface
+          <div className="space-y-3">
+            <div className="font-mono text-xs text-radar font-semibold tracking-widest uppercase flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-radar animate-pulse" />
+              <span>DEVELOPER INTERFACE</span>
             </div>
-            <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight font-sans">
-              REST API &amp; CLI Commands
+            <h2 className="text-3xl sm:text-5xl font-bold text-white tracking-tight font-sans leading-[1.1]">
+              REST API &amp; <span className="text-neutral-400 font-light">CLI commands.</span>
             </h2>
           </div>
           <div className="text-xs font-sans text-neutral-500">
