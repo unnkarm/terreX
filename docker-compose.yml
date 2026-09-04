@@ -59,7 +59,7 @@ services:
         INSTALL_ML: "true"
     container_name: terrex-backend
     restart: unless-stopped
-    mem_limit: 1536m
+    mem_limit: 4096m
     depends_on:
       postgres:
         condition: service_healthy

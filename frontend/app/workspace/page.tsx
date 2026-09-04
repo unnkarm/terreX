@@ -208,7 +208,7 @@ export default function WorkspacePage() {
             isLeftOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
-          <div className="flex flex-col h-full min-h-0 overflow-y-auto p-3 gap-2.5">
+          <div className="flex flex-col h-full overflow-hidden p-3 gap-2.5">
             {/* 1. Intent-Aware SearchBar (Semantic Text & Reference Chip) */}
             <SearchBar
               onTextSearch={runTextSearch}
@@ -233,7 +233,7 @@ export default function WorkspacePage() {
             )}
 
             {/* 3. Ranked Candidate Results Queue */}
-            <div className="min-h-[260px] flex-1 rounded border border-neutral-800/80 overflow-hidden">
+            <div className="flex-1 min-h-0 rounded border border-neutral-800/80 overflow-hidden">
               <ResultsList
                 results={results}
                 selectedTileId={selected?.tile_id ?? null}
