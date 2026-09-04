@@ -16,12 +16,14 @@ export default function SearchBar({
   onTextSearch,
   onImageSearch,
   onModeChange,
-  activeMode = "semantic",
+  activeMode,
   loading,
 }: Props) {
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
+  const [internalMode, setInternalMode] = useState<SearchMode>("semantic");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const currentMode = activeMode ?? internalMode;
 
   const suggestions = [
     "New buildings near water in New Town, Kolkata",
@@ -42,16 +44,21 @@ export default function SearchBar({
     { id: "image", label: "Reference Chip" },
   ];
 
+  const handleModeChange = (mode: SearchMode) => {
+    setInternalMode(mode);
+    onModeChange?.(mode);
+  };
+
   return (
-    <div className="flex flex-col gap-2.5 w-full bg-neutral-950 border border-neutral-800 rounded-lg p-3 font-sans text-xs">
+    <div className="flex max-h-[42vh] min-h-[220px] flex-col gap-2.5 overflow-y-auto w-full bg-neutral-950 border border-neutral-800 rounded-lg p-3 font-sans text-xs">
       {/* Search Mode Switcher (Semantic vs Image) */}
       <div className="flex items-center gap-1 border-b border-neutral-800/80 pb-2">
         {modes.map((m) => {
-          const isSelected = activeMode === m.id;
+          const isSelected = currentMode === m.id;
           return (
             <button
               key={m.id}
-              onClick={() => onModeChange && onModeChange(m.id)}
+              onClick={() => handleModeChange(m.id)}
               className={`flex-1 py-1.5 px-2 rounded font-sans text-xs uppercase tracking-widest font-semibold transition-all text-center ${
                 isSelected
                   ? "bg-white text-black shadow-sm"
@@ -70,7 +77,7 @@ export default function SearchBar({
           <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
-          {activeMode === "semantic" ? (
+          {currentMode === "semantic" ? (
             <span>What are you <span className="text-neutral-400 font-light">looking for?</span></span>
           ) : (
             <span>Upload reference <span className="text-neutral-400 font-light">optical chip</span></span>
@@ -82,7 +89,7 @@ export default function SearchBar({
       </div>
 
       {/* Semantic Input */}
-      {activeMode === "semantic" && (
+      {currentMode === "semantic" && (
         <div className="space-y-2.5">
           <div className="relative flex items-center bg-black border border-neutral-800 rounded focus-within:border-white focus-within:ring-1 focus-within:ring-white/30 transition-all">
             <input
@@ -124,7 +131,7 @@ export default function SearchBar({
       )}
 
       {/* Image Search Mode */}
-      {activeMode === "image" && (
+      {currentMode === "image" && (
         <div
           onClick={() => fileInputRef.current?.click()}
           className="border-2 border-dashed border-neutral-800 hover:border-emerald-500/60 rounded p-6 text-center cursor-pointer transition-colors bg-black/40 group"

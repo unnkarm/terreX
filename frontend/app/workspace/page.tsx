@@ -141,7 +141,7 @@ export default function WorkspacePage() {
               </svg>
             </div>
             <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-400">Vector Index Empty</p>
-            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white md:text-3xl">Ingest data to access the dashboard</h2>
+            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white md:text-3xl">Ingest data to access the workspace</h2>
             <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-neutral-400">No satellite scenes are available in the local vector database yet. Add a scene to enable search, change detection, and evidence analysis.</p>
             <Link href="/ingest" className="mt-7 inline-flex items-center gap-3 border border-emerald-400 bg-emerald-500 px-5 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.15em] text-black transition-colors hover:bg-emerald-300">
               Add satellite data <span aria-hidden="true">&rarr;</span>
@@ -208,7 +208,7 @@ export default function WorkspacePage() {
             isLeftOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
-          <div className="flex flex-col h-full overflow-hidden p-3 gap-2.5">
+          <div className="flex flex-col h-full min-h-0 overflow-y-auto p-3 gap-2.5">
             {/* 1. Intent-Aware SearchBar (Semantic Text & Reference Chip) */}
             <SearchBar
               onTextSearch={runTextSearch}
@@ -233,7 +233,7 @@ export default function WorkspacePage() {
             )}
 
             {/* 3. Ranked Candidate Results Queue */}
-            <div className="flex-1 min-h-0 rounded border border-neutral-800/80 overflow-hidden">
+            <div className="min-h-[260px] flex-1 rounded border border-neutral-800/80 overflow-hidden">
               <ResultsList
                 results={results}
                 selectedTileId={selected?.tile_id ?? null}

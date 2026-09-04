@@ -29,9 +29,8 @@ export default function BeforeAfterSlider({
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Authentic nadir satellite imagery (T0: Undeveloped terrain -> T1: New urban construction)
-  const fallbackBefore = "https://images.unsplash.com/photo-1581084324492-c8076f130f86?w=800&auto=format&fit=crop&q=80";
-  const fallbackAfter = "https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=800&auto=format&fit=crop&q=80";
+  const fallbackBefore = "/icon.svg";
+  const fallbackAfter = "/icon.svg";
 
   const bUrl = beforeImg ? thumbnailUrl(beforeImg) : fallbackBefore;
   const aUrl = afterImg ? thumbnailUrl(afterImg) : fallbackAfter;

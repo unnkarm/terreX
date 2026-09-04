@@ -45,8 +45,8 @@ MIN_USABLE_FRACTION = 0.20
 
 # Sensor band mappings (1-based band indexes for rasterio)
 DEFAULT_BAND_MAPS: Dict[str, Dict[str, int]] = {
-    "sentinel-2": {"blue": 1, "green": 2, "red": 3, "nir": 4, "swir1": 5, "scl": 6},
-    "sentinel2": {"blue": 1, "green": 2, "red": 3, "nir": 4, "swir1": 5, "scl": 6},
+    "sentinel-2": {"blue": 1, "green": 2, "red": 3, "nir": 4, "swir1": 5, "swir2": 6, "scl": 7},
+    "sentinel2": {"blue": 1, "green": 2, "red": 3, "nir": 4, "swir1": 5, "swir2": 6, "scl": 7},
     "landsat-8": {"blue": 2, "green": 3, "red": 4, "nir": 5, "swir1": 6},
     "landsat": {"blue": 2, "green": 3, "red": 4, "nir": 5, "swir1": 6},
     "rgb": {"red": 1, "green": 2, "blue": 3},
@@ -106,7 +106,8 @@ def _quality_mask(
         }
 
     scl_index = band_map.get("scl")
-    if scl_index is not None and scl_index < bands_data.shape[0]:
+    if scl_index is not None and 1 <= scl_index <= bands_data.shape[0]:
+        scl_index -= 1
         scl = bands_data[scl_index]
         clear = np.isin(scl.astype(np.int32), [4, 5, 6, 7])
         confound_codes = {0: "nodata", 1: "saturated", 2: "dark", 3: "cloud_shadow", 8: "cloud_medium", 9: "cloud_high", 10: "cirrus", 11: "snow"}
@@ -156,8 +157,10 @@ def _resolve_band_map(dataset: rasterio.DatasetReader, sensor_name: str) -> Dict
             if all(v <= dataset.count for v in bmap.values()):
                 return bmap
 
+    if dataset.count >= 7:
+        return {"blue": 1, "green": 2, "red": 3, "nir": 4, "swir1": 5, "swir2": 6, "scl": 7}
     if dataset.count >= 6:
-        return {"blue": 1, "green": 2, "red": 3, "nir": 4, "swir1": 5, "scl": 6}
+        return {"blue": 1, "green": 2, "red": 3, "nir": 4, "swir1": 5, "swir2": 6}
     elif dataset.count >= 4:
         return {"blue": 1, "green": 2, "red": 3, "nir": 4}
     elif dataset.count == 3:

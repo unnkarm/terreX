@@ -14,7 +14,7 @@ interface Props {
 export default function FilterBar({
   filters,
   onChange,
-  sensors = ["Sentinel-2", "Landsat-8"],
+  sensors = [],
   onTriggerDrawBbox,
   onClearBbox,
 }: Props) {
@@ -66,12 +66,12 @@ export default function FilterBar({
           )}
           <span className="text-[9px] text-neutral-600">|</span>
           <select
-            value={filters.sensor ?? "Sentinel-2"}
+            value={filters.sensor ?? ""}
             onChange={(e) => onChange({ ...filters, sensor: e.target.value || undefined })}
             className="bg-black border border-neutral-800 rounded px-2 py-1 text-[10px] text-neutral-300 outline-none uppercase cursor-pointer"
           >
-            <option value="Sentinel-2">SENTINEL-2 (PRIMARY)</option>
-            {sensors.filter(s => s !== "Sentinel-2").map((s) => (
+            <option value="">ALL SENSORS</option>
+            {sensors.map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
           </select>

@@ -93,18 +93,9 @@ def stage_provider_scene(req: ProviderStageRequest = Body(...)):
     )
     target = next((i for i in items if i.item_id == req.item_id), None)
     if not target:
-        # Fallback dummy for immediate staging response
-        from data_sources.base import EOSearchResult
-        from datetime import datetime
-        target = EOSearchResult(
-            item_id=req.item_id,
-            provider=req.provider,
-            dataset_name="Staged EO Scene",
-            acquisition_date=datetime.utcnow(),
-            cloud_cover_percent=2.0,
-            bbox_wgs84=req.target_bbox or [88.25, 22.45, 88.48, 22.65],
-            spatial_resolution_m=10.0,
-            bands=["B02", "B03", "B04", "B08"],
+        raise HTTPException(
+            status_code=404,
+            detail=f"Provider item '{req.item_id}' was not found in the local catalog",
         )
 
     staged_path = src.stage_to_cog(target, settings.INCOMING_DIR, req.target_bbox)

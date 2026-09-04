@@ -60,10 +60,10 @@ export default function ResultsList({
           const qualityPct = Math.round((r.quality_score ?? 0.94) * 100);
           const cloudPct = Math.round((r.cloud_fraction ?? 0.03) * 100);
           const title = r.classification_label ?? "NEW STRUCTURES";
-          const sub = r.location_name ?? "Yamuna Riverbank Perimeter";
+          const sub = r.location_name ?? r.scene_id;
           const thumb = r.thumbnail_path
             ? thumbnailUrl(r.thumbnail_path)
-            : "https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=400&auto=format&fit=crop&q=80";
+            : "/icon.svg";
 
           return (
             <div

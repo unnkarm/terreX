@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from db.database import init_db
-from api import routes_search, routes_ingest, routes_change, routes_feedback, routes_system, routes_chat
+from api import routes_search, routes_ingest, routes_change, routes_feedback, routes_system, routes_chat, routes_discovery, routes_review
 from services.chat_agent import start_idle_unload_monitor
 
 logging.basicConfig(level=logging.INFO)
@@ -47,6 +47,8 @@ app.include_router(routes_change.router)
 app.include_router(routes_feedback.router)
 app.include_router(routes_system.router)
 app.include_router(routes_chat.router)
+app.include_router(routes_discovery.router)
+app.include_router(routes_review.router)
 
 
 @app.on_event("startup")

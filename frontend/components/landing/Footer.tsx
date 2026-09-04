@@ -42,7 +42,6 @@ export default function Footer() {
             <div className="text-white font-semibold uppercase tracking-wider text-[11px]">CONSOLES</div>
             <ul className="space-y-1 text-neutral-400 text-[11px] font-sans">
               <li><Link href="/workspace" className="hover:text-white transition">Workspace</Link></li>
-              <li><Link href="/dashboard" className="hover:text-white transition">Dashboard</Link></li>
               <li><Link href="/changes" className="hover:text-white transition">Change Scanner</Link></li>
               <li><Link href="/review" className="hover:text-white transition">Review Queue</Link></li>
               <li><Link href="/data" className="hover:text-white transition">Data Catalog</Link></li>

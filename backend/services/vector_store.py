@@ -16,6 +16,18 @@ from config import settings
 logger = logging.getLogger("terrex.vector_store")
 
 
+def _sensor_aliases(sensor: str) -> list[str]:
+    normalized = sensor.lower().replace("-", "").replace("_", "").replace(" ", "")
+    aliases = {sensor}
+    if "sentinel2" in normalized:
+        aliases.update({"Sentinel-2", "Sentinel-2 MSI", "Sentinel2", "sentinel-2", "sentinel2"})
+    elif "sentinel1" in normalized:
+        aliases.update({"Sentinel-1", "Sentinel-1 SAR", "Sentinel1", "sentinel-1", "sentinel1"})
+    elif "landsat8" in normalized:
+        aliases.update({"Landsat-8", "Landsat-8 OLI", "Landsat8", "landsat-8", "landsat8"})
+    return sorted(aliases)
+
+
 class VectorStore:
     def __init__(self):
         self.client = QdrantClient(url=settings.QDRANT_URL)
@@ -81,6 +93,30 @@ class VectorStore:
             logger.warning("Could not count vectors in '%s': %s", self.collection, exc)
             return 0
 
+    def scroll_vectors(self, batch_size: int = 256) -> list[dict]:
+        """Return every stored point, including its vector and payload."""
+        points = []
+        offset = None
+        while True:
+            batch, offset = self.client.scroll(
+                collection_name=self.collection,
+                offset=offset,
+                limit=batch_size,
+                with_payload=True,
+                with_vectors=True,
+            )
+            for point in batch:
+                payload = point.payload or {}
+                points.append({
+                    "tile_id": payload.get("tile_id"),
+                    "point_id": point.id,
+                    "vector": point.vector,
+                    "payload": payload,
+                })
+            if offset is None:
+                break
+        return points
+
     def search(
         self,
         vector,
@@ -93,7 +129,9 @@ class VectorStore:
     ):
         must = []
         if sensor:
-            must.append(qm.FieldCondition(key="sensor", match=qm.MatchValue(value=sensor)))
+            aliases = _sensor_aliases(sensor)
+            match = qm.MatchAny(any=aliases) if len(aliases) > 1 else qm.MatchValue(value=sensor)
+            must.append(qm.FieldCondition(key="sensor", match=match))
         if date_from or date_to:
             rng = {}
             if date_from:

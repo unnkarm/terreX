@@ -39,10 +39,24 @@ services:
       - "6333:6333"
     networks: [terrex-net]
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: terrex-ollama
+    profiles: ["chat"]
+    restart: unless-stopped
+    mem_limit: 1024m
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks: [terrex-net]
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        INSTALL_ML: "true"
     container_name: terrex-backend
     restart: unless-stopped
     mem_limit: 1536m
@@ -59,6 +73,7 @@ services:
       MODEL_DIR: /models
       DATA_DIR: /data
       QDRANT_URL: http://qdrant:6333
+      OLLAMA_BASE_URL: http://ollama:11434
       DATABASE_URL: postgresql+psycopg2://terrex:terrex@postgres:5432/terrex
       PROCESSING_VERSION: terrex-mvp-0.1.0
     volumes:
@@ -74,14 +89,16 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_API_URL: ""
+        API_INTERNAL_URL: http://backend:8000
     container_name: terrex-frontend
     restart: unless-stopped
     mem_limit: 512m
     depends_on:
       - backend
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: ""
+      API_INTERNAL_URL: http://backend:8000
     ports:
       - "3000:3000"
     networks: [terrex-net]
@@ -89,6 +106,7 @@ services:
 volumes:
   pgdata:
   qdrant_data:
+  ollama_data:
 
 networks:
   terrex-net:

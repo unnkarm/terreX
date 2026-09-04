@@ -83,16 +83,64 @@ def _load_precomputed_indices(tile: Tile) -> Optional[SpectralIndices]:
     return None
 
 
+def _prepare_prithvi_input(raster: np.ndarray, band_map: Optional[Dict[str, int]]) -> Optional[np.ndarray]:
+    """Arrange TerreX multispectral data into Prithvi's six-band input order."""
+    if not band_map:
+        return None
+    required = ("blue", "green", "red", "nir", "swir1", "swir2")
+    if any(name not in band_map or band_map[name] >= raster.shape[-1] for name in required):
+        return None
+    return np.stack([raster[..., band_map[name]] for name in required], axis=0)
+
+
+def _tile_has_prithvi_bands(tile: Tile) -> bool:
+    """Return whether the tile pack can feed the six-band Prithvi path."""
+    try:
+        data = np.load(Path(tile.tile_path).with_suffix(".npz"), allow_pickle=True)
+        if "bands" not in data or "band_map" not in data:
+            return False
+        band_map = data["band_map"].item()
+        return _prepare_prithvi_input(np.transpose(data["bands"], (1, 2, 0)), band_map) is not None
+    except Exception:
+        return False
+
+
 def _difference_to_change_map(before_feat: np.ndarray, after_feat: np.ndarray) -> np.ndarray:
     """
     Swappable change detection head.
     Computes per-patch L2 feature distance, min-max normalized to 0..1.
     """
+    if before_feat.shape != after_feat.shape:
+        raise ValueError(
+            f"Change feature shapes do not match: before={before_feat.shape}, after={after_feat.shape}"
+        )
     diff = np.linalg.norm(before_feat - after_feat, axis=-1)
     lo, hi = diff.min(), diff.max()
     if hi - lo < 1e-8:
         return np.zeros_like(diff)
     return (diff - lo) / (hi - lo)
+
+
+def _extract_prithvi_features(raster: np.ndarray, band_map: Optional[Dict[str, int]]):
+    """Use Prithvi's six-band order when possible, otherwise RGB placeholder features."""
+    chw = _prepare_prithvi_input(raster, band_map)
+    if chw is None:
+        chw = np.transpose(raster[..., :3], (2, 0, 1))
+    return prithvi_service.extract(chw), chw
+
+
+def _extract_pair_features(
+    before_raster: np.ndarray,
+    before_bmap: Optional[Dict[str, int]],
+    after_raster: np.ndarray,
+    after_bmap: Optional[Dict[str, int]],
+):
+    before_chw = _prepare_prithvi_input(before_raster, before_bmap)
+    after_chw = _prepare_prithvi_input(after_raster, after_bmap)
+    if before_chw is None or after_chw is None:
+        before_chw = np.transpose(before_raster[..., :3], (2, 0, 1))
+        after_chw = np.transpose(after_raster[..., :3], (2, 0, 1))
+    return prithvi_service.extract(before_chw), before_chw, prithvi_service.extract(after_chw), after_chw
 
 
 def _parse_date(date_val: Any) -> Optional[datetime]:
@@ -186,9 +234,17 @@ def run_change_detection(
             "earliest_supported_observation": candidates[0]["acquisition_date"].isoformat() if candidates else None,
         }
 
-    before_cand, after_cand = candidates[0], candidates[-1]
-
     with get_session() as session:
+        if not prithvi_service.is_placeholder:
+            prithvi_ready = []
+            for cand in candidates:
+                tile = session.get(Tile, cand["tile_id"])
+                if tile is not None and _tile_has_prithvi_bands(tile):
+                    prithvi_ready.append(cand)
+            if len(prithvi_ready) >= 2:
+                candidates = prithvi_ready
+
+        before_cand, after_cand = candidates[0], candidates[-1]
         before_tile = session.get(Tile, before_cand["tile_id"])
         after_tile = session.get(Tile, after_cand["tile_id"])
 
@@ -204,11 +260,12 @@ def run_change_detection(
         norm_after_raster = normalize_histogram_match(aligned_after_raster, before_raster)
 
         # 4. Feature Extraction & Change Probability Map
-        before_chw = np.transpose(before_raster[..., :3], (2, 0, 1))
-        norm_after_chw = np.transpose(norm_after_raster[..., :3], (2, 0, 1))
-
-        before_feat_map = prithvi_service.extract(before_chw)
-        after_feat_map = prithvi_service.extract(norm_after_chw)
+        before_feat_map, before_chw, after_feat_map, norm_after_chw = _extract_pair_features(
+            before_raster,
+            before_bmap,
+            norm_after_raster,
+            after_bmap,
+        )
 
         change_prob_map = _difference_to_change_map(before_feat_map.array, after_feat_map.array)
         raw_change_score = float(change_prob_map.mean())
@@ -249,9 +306,10 @@ def run_change_detection(
         if len(candidates) > 2:
             for mid_cand in candidates[1:]:
                 mid_t = session.get(Tile, mid_cand["tile_id"])
-                mid_rast, _ = _load_tile_multispectral_or_rgb(mid_t)
-                mid_chw = np.transpose(mid_rast[..., :3], (2, 0, 1))
-                mid_feat = prithvi_service.extract(mid_chw)
+                mid_rast, mid_bmap = _load_tile_multispectral_or_rgb(mid_t)
+                mid_feat, _ = _extract_prithvi_features(mid_rast, mid_bmap)
+                if mid_feat.array.shape != before_feat_map.array.shape:
+                    continue
                 score_mid = float(_difference_to_change_map(before_feat_map.array, mid_feat.array).mean())
                 temporal_scores.append(score_mid)
                 if score_mid > settings.CHANGE_PROB_THRESHOLD and mid_t.acquisition_date < earliest_change_date:

@@ -41,10 +41,7 @@ def status():
             },
             "prithvi": {
                 "staged": not prithvi_service.is_placeholder,
-                "active_model": (
-                    "prithvi-eo-v1" if not prithvi_service.is_placeholder
-                    else prithvi_service._placeholder.model_name
-                ),
+                "active_model": prithvi_service.model_name,
             },
         },
         "paths": {
