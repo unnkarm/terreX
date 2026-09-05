@@ -115,6 +115,15 @@ export default function MapView({
     };
   }, []);
 
+  // MapLibre needs an explicit resize when the surrounding side panels open
+  // or close; observing the container also covers the sidebar transition.
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver(() => mapRef.current?.resize());
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
   // Switch basemap
   const switchBasemap = (type: BasemapType) => {
     setBasemap(type);

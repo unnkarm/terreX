@@ -81,12 +81,7 @@ export default function TopNav({ status, onExportClick }: TopNavProps) {
           </button>
         )}
 
-        <Link
-          href="/ingest"
-          className="px-3.5 py-1.5 rounded border border-neutral-700 text-neutral-300 hover:border-emerald-500 hover:text-emerald-400 transition-all bg-neutral-950/80 font-sans font-semibold text-xs tracking-widest uppercase"
-        >
-          + INGEST
-        </Link>
+        
       </div>
     </header>
   );

@@ -22,6 +22,7 @@ export default function SearchBar({
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [internalMode, setInternalMode] = useState<SearchMode>("semantic");
+  const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentMode = activeMode ?? internalMode;
 
@@ -145,6 +146,11 @@ export default function SearchBar({
           <p className="text-[10px] text-neutral-400 font-sans font-light mt-1">
             PNG, JPEG, or Sentinel-2 GeoTIFF / COG
           </p>
+          {selectedFileName && (
+            <p className="mt-2 truncate text-[10px] text-emerald-400 font-mono" title={selectedFileName}>
+              READY: {selectedFileName}
+            </p>
+          )}
         </div>
       )}
 
@@ -156,7 +162,10 @@ export default function SearchBar({
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) onImageSearch(f);
+          if (f) {
+            setSelectedFileName(f.name);
+            onImageSearch(f);
+          }
           e.target.value = "";
         }}
       />

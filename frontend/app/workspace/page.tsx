@@ -204,11 +204,11 @@ export default function WorkspacePage() {
         
         {/* LEFT COLUMN: Search & Filters & Ranked Results (390px) */}
         <div
-          className={`w-[390px] flex-shrink-0 h-full border-r border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 transition-transform duration-300 ${
-            isLeftOpen ? "translate-x-0" : "-translate-x-full"
+          className={`flex-shrink-0 h-full border-r border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 overflow-hidden transition-[width,transform] duration-300 ${
+            isLeftOpen ? "w-[390px] translate-x-0" : "w-0 -translate-x-full border-r-0"
           }`}
         >
-          <div className="flex flex-col h-full overflow-hidden p-3 gap-2.5">
+          <div className="flex flex-col h-full min-w-[390px] overflow-y-auto overflow-x-hidden p-3 gap-2.5">
             {/* 1. Intent-Aware SearchBar (Semantic Text & Reference Chip) */}
             <SearchBar
               onTextSearch={runTextSearch}
@@ -233,7 +233,7 @@ export default function WorkspacePage() {
             )}
 
             {/* 3. Ranked Candidate Results Queue */}
-            <div className="flex-1 min-h-0 rounded border border-neutral-800/80 overflow-hidden">
+            <div className="flex-none rounded border border-neutral-800/80 overflow-hidden">
               <ResultsList
                 results={results}
                 selectedTileId={selected?.tile_id ?? null}
@@ -290,8 +290,8 @@ export default function WorkspacePage() {
         {/* RIGHT COLUMN: Site Inspection & Verification Panel (420px) */}
         {selected && (
           <div
-            className={`w-[420px] flex-shrink-0 h-full border-l border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 transition-transform duration-300 ${
-              isRightOpen ? "translate-x-0" : "translate-x-full"
+            className={`flex-shrink-0 h-full border-l border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 overflow-hidden transition-[width,transform] duration-300 ${
+              isRightOpen ? "w-[420px] translate-x-0" : "w-0 translate-x-full border-l-0"
             }`}
           >
             <ResultDetail

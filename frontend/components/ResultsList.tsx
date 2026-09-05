@@ -21,7 +21,7 @@ export default function ResultsList({
   placeholderWarning,
 }: Props) {
   return (
-    <div className="flex flex-col h-full bg-neutral-950 font-mono text-xs">
+    <div className="flex flex-col bg-neutral-950 font-mono text-xs">
       {/* Header */}
       <div className="px-3 py-2.5 border-b border-neutral-800 flex items-center justify-between bg-black">
         <div className="flex items-center gap-2">
@@ -41,7 +41,7 @@ export default function ResultsList({
       </div>
 
       {/* Results Scroll List */}
-      <div className="flex-1 overflow-y-auto p-2.5 space-y-2.5">
+      <div className="p-2.5 space-y-2.5">
         {results.length === 0 && (
           <div className="p-8 text-center text-neutral-500 text-xs space-y-2">
             <svg className="w-8 h-8 text-neutral-700 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
