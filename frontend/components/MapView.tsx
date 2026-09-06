@@ -1,4 +1,5 @@
 "use client";
+"use client";
 
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
@@ -12,6 +13,7 @@ interface Props {
   center: [number, number];
   isDrawingAoi?: boolean;
   onAoiDrawn?: (bbox: [number, number, number, number]) => void;
+  onAoiPolygonDrawn?: (polygonGeoJson: { type: "Polygon"; coordinates: number[][][] }) => void;
   activeCluster?: SimilarCluster | null;
 }
 
@@ -84,16 +86,20 @@ export default function MapView({
   center,
   isDrawingAoi = false,
   onAoiDrawn,
+  onAoiPolygonDrawn,
   activeCluster,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<Marker[]>([]);
   const clusterMarkersRef = useRef<Marker[]>([]);
+  const polygonMarkersRef = useRef<Marker[]>([]);
   const [basemap, setBasemap] = useState<BasemapType>("satellite");
-  const [drawMode, setDrawMode] = useState<"none" | "box">("none");
+  const [drawMode, setDrawMode] = useState<"none" | "box" | "polygon">("none");
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null);
+  const [polygonPts, setPolygonPts] = useState<[number, number][]>([]);
+  const [activePolygon, setActivePolygon] = useState<[number, number][] | null>(null);
 
   // Initialize Map
   useEffect(() => {
@@ -105,6 +111,37 @@ export default function MapView({
       center,
       zoom: 12,
       attributionControl: false,
+    });
+
+    map.on("load", () => {
+      // Setup GeoJSON Polygon AOI layer
+      if (!map.getSource("aoi-polygon-source")) {
+        map.addSource("aoi-polygon-source", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+
+        map.addLayer({
+          id: "aoi-polygon-fill",
+          type: "fill",
+          source: "aoi-polygon-source",
+          paint: {
+            "fill-color": "#06b6d4",
+            "fill-opacity": 0.22,
+          },
+        });
+
+        map.addLayer({
+          id: "aoi-polygon-stroke",
+          type: "line",
+          source: "aoi-polygon-source",
+          paint: {
+            "line-color": "#22d3ee",
+            "line-width": 2.5,
+            "line-dasharray": [2, 1],
+          },
+        });
+      }
     });
 
     mapRef.current = map;
@@ -151,9 +188,12 @@ export default function MapView({
     mapRef.current?.flyTo({ center, zoom: 12, duration: 600 });
   };
 
-  const toggleDrawMode = () => {
-    const next = drawMode === "box" ? "none" : "box";
+  const setMode = (mode: "none" | "box" | "polygon") => {
+    const next = drawMode === mode ? "none" : mode;
     setDrawMode(next);
+    if (next !== "polygon") {
+      setPolygonPts([]);
+    }
     if (mapRef.current) {
       if (next === "box") {
         mapRef.current.dragPan.disable();
@@ -171,8 +211,6 @@ export default function MapView({
     setDragStart(pt);
     setDragCurrent(pt);
   };
-
-
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!dragStart || drawMode !== "box" || !containerRef.current) return;
@@ -200,6 +238,58 @@ export default function MapView({
     setDragCurrent(null);
     setDrawMode("none");
     map.dragPan.enable();
+  };
+
+  // Polygon click handler on map
+  const handleMapClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (drawMode !== "polygon" || !mapRef.current || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    const lngLat = mapRef.current.unproject([clickX, clickY]);
+    const nextPts: [number, number][] = [...polygonPts, [lngLat.lng, lngLat.lat]];
+    setPolygonPts(nextPts);
+  };
+
+  const completePolygon = () => {
+    if (polygonPts.length < 3) return;
+    const closed = [...polygonPts, polygonPts[0]];
+    setActivePolygon(closed);
+    const geoJsonPoly = {
+      type: "Polygon" as const,
+      coordinates: [closed],
+    };
+
+    // Update GeoJSON layer on map
+    if (mapRef.current && mapRef.current.getSource("aoi-polygon-source")) {
+      const src = mapRef.current.getSource("aoi-polygon-source") as maplibregl.GeoJSONSource;
+      src.setData({
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            geometry: geoJsonPoly,
+            properties: { name: "Active AOI Polygon" },
+          },
+        ],
+      });
+    }
+
+    if (onAoiPolygonDrawn) {
+      onAoiPolygonDrawn(geoJsonPoly);
+    }
+
+    setPolygonPts([]);
+    setDrawMode("none");
+  };
+
+  const clearPolygon = () => {
+    setActivePolygon(null);
+    setPolygonPts([]);
+    if (mapRef.current && mapRef.current.getSource("aoi-polygon-source")) {
+      const src = mapRef.current.getSource("aoi-polygon-source") as maplibregl.GeoJSONSource;
+      src.setData({ type: "FeatureCollection", features: [] });
+    }
   };
 
   // Markers render
@@ -286,6 +376,7 @@ export default function MapView({
   return (
     <div
       className="relative w-full h-full overflow-hidden select-none"
+      onClick={handleMapClick}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -304,7 +395,7 @@ export default function MapView({
           }}
         >
           <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-black/80 font-mono text-[9px] text-cyan-400 font-bold">
-            AOI SELECTION
+            RECTANGLE AOI
           </span>
         </div>
       )}
@@ -326,7 +417,7 @@ export default function MapView({
         ))}
       </div>
 
-      {/* Custom Map Controls HUD (Requirement 20) */}
+      {/* Custom Map Controls HUD */}
       <div className="absolute top-4 right-4 z-20 flex flex-col gap-1.5 bg-black/85 backdrop-blur-md p-1.5 rounded border border-neutral-800 shadow-xl font-mono text-xs">
         <button
           onClick={handleZoomIn}
@@ -351,29 +442,56 @@ export default function MapView({
         </button>
         <div className="w-full h-px bg-neutral-800 my-0.5" />
         <button
-          onClick={toggleDrawMode}
+          onClick={() => setMode("box")}
           className={`w-8 h-8 rounded flex items-center justify-center transition-all border ${
             drawMode === "box"
               ? "bg-cyan-950 text-cyan-400 border-cyan-500 font-bold shadow-[0_0_10px_#06b6d4]"
               : "bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-cyan-400 border-neutral-800"
           }`}
-          title="Draw Area of Interest (AOI)"
+          title="Draw Rectangle BBox AOI"
         >
           ◇
         </button>
         <button
-          onClick={toggleDrawMode}
-          className="w-8 h-8 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-emerald-400 flex items-center justify-center border border-neutral-800"
-          title="Polygon Extent"
+          onClick={() => setMode("polygon")}
+          className={`w-8 h-8 rounded flex items-center justify-center transition-all border ${
+            drawMode === "polygon"
+              ? "bg-emerald-950 text-emerald-400 border-emerald-500 font-bold shadow-[0_0_10px_#10b981]"
+              : "bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-emerald-400 border-neutral-800"
+          }`}
+          title="Draw Freehand Polygon AOI"
         >
           ⬡
         </button>
+        {activePolygon && (
+          <button
+            onClick={clearPolygon}
+            className="w-8 h-8 rounded bg-neutral-900 hover:bg-red-950 text-neutral-400 hover:text-red-400 flex items-center justify-center border border-neutral-800"
+            title="Clear Polygon AOI"
+          >
+            ✕
+          </button>
+        )}
       </div>
 
-      {/* AOI Active Notification */}
+      {/* AOI Draw Mode HUD Notifications */}
       {drawMode === "box" && (
         <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 px-4 py-1.5 rounded-full bg-cyan-950/90 border border-cyan-500 text-cyan-300 font-mono text-[10px] tracking-wider uppercase shadow-lg animate-pulse">
           Click and drag on the map to define bounding box AOI
+        </div>
+      )}
+
+      {drawMode === "polygon" && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-4 py-1.5 rounded-full bg-emerald-950/90 border border-emerald-500 text-emerald-300 font-mono text-[10px] tracking-wider uppercase shadow-lg">
+          <span>Click map to add polygon vertices ({polygonPts.length} pts)</span>
+          {polygonPts.length >= 3 && (
+            <button
+              onClick={completePolygon}
+              className="px-2 py-0.5 rounded bg-emerald-500 text-black font-bold hover:bg-emerald-400 transition-colors"
+            >
+              COMPLETE POLYGON ✓
+            </button>
+          )}
         </div>
       )}
     </div>

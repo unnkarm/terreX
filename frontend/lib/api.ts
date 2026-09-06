@@ -23,16 +23,81 @@ export interface SearchResult {
   location_name?: string;
 }
 
+export interface ParsedFilters {
+  semantic_query?: string;
+  spatial_relation?: {
+    type: string;
+    target: string;
+    distance_km: number;
+    resolved_name?: string;
+  } | null;
+  date_from?: string | null;
+  date_to?: string | null;
+  max_cloud_cover?: number | null;
+  sensor?: string | null;
+  explanation?: string[];
+}
+
 export interface TextSearchResponse {
   query: string;
+  effective_semantic_query?: string;
   embedding_model: string;
   embedding_is_placeholder: boolean;
+  parsed_filters?: ParsedFilters;
   results: SearchResult[];
   target_location?: {
     lon: number;
     lat: number;
     name: string;
   };
+  has_polygon_filter?: boolean;
+}
+
+export interface ChangeObservation {
+  index: number;
+  tile_id: string;
+  scene_id: string;
+  acquisition_date: string;
+  date_formatted: string;
+  year: string;
+  sensor: string;
+  cloud_fraction: number;
+  quality_score: number;
+  thumbnail_url: string;
+  distance_from_baseline: number;
+  mean_ndvi: number;
+  mean_ndwi: number;
+  mean_ndbi: number;
+  is_baseline: boolean;
+  is_earliest_change: boolean;
+}
+
+export interface EvidenceCheckItem {
+  label: string;
+  status: "pass" | "fail" | "info";
+  value: string;
+  details: string;
+}
+
+export interface EvidenceBundle {
+  d_ndvi: number;
+  d_ndwi: number;
+  d_ndbi: number;
+  persistence_count: number;
+  total_observations: number;
+  valid_pixel_ratio: number;
+  registration_correlation: number;
+  registration_aligned: boolean;
+  cloud_fraction: number;
+  radiometric_diff: number;
+  items: EvidenceCheckItem[];
+}
+
+export interface ConfoundItem {
+  factor: string;
+  severity: "high" | "medium" | "low";
+  penalty_factor: number;
+  explanation: string;
 }
 
 export interface ChangeRegionItem {
@@ -68,6 +133,17 @@ export interface ChangeDetectionResponse {
   change_mask_path?: string;
   change_mask_url?: string;
   earliest_supported_observation?: string;
+  observations?: ChangeObservation[];
+  evidence?: EvidenceBundle;
+  confidence_breakdown?: {
+    raw_change_score: number;
+    post_suppression_change_score: number;
+    combined_optical_quality: number;
+    final_confidence: number;
+    is_high_certainty: boolean;
+    confounds: ConfoundItem[];
+  };
+  confounds?: ConfoundItem[];
   registration?: {
     is_aligned: boolean;
     correlation_before: number;
@@ -139,6 +215,7 @@ export interface FilterState {
   dateTo?: string;
   minSimilarity?: number;
   bbox?: [number, number, number, number];
+  polygon?: [number, number][] | any;
   maxCloudCover?: number;
   changeTypes?: string[];
 }
@@ -194,6 +271,9 @@ export async function searchByText(query: string, filters: FilterState = {}, top
     params.set("max_lon", String(filters.bbox[2]));
     params.set("max_lat", String(filters.bbox[3]));
   }
+  if (filters.polygon) {
+    params.set("polygon", JSON.stringify(filters.polygon));
+  }
   
   try {
     const res = await fetch(`${API_BASE}/api/search/text?${params.toString()}`);
@@ -215,6 +295,7 @@ export async function searchByImage(file: File, filters: FilterState = {}, topK:
   if (filters.dateFrom) form.append("date_from", filters.dateFrom);
   if (filters.dateTo) form.append("date_to", filters.dateTo);
   if (filters.minSimilarity !== undefined) form.append("min_similarity", String(filters.minSimilarity));
+  if (filters.polygon) form.append("polygon", JSON.stringify(filters.polygon));
 
   try {
     const res = await fetch(`${API_BASE}/api/search/image`, { method: "POST", body: form });

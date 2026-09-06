@@ -48,18 +48,18 @@ export default function FilterBar({
           <button
             onClick={onTriggerDrawBbox}
             className={`px-2 py-1 rounded text-[9px] uppercase tracking-wider transition-all border ${
-              filters.bbox
+              filters.bbox || filters.polygon
                 ? "bg-cyan-950/60 border-cyan-500 text-cyan-300 font-bold"
                 : "bg-neutral-900 border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500"
             }`}
           >
-            {filters.bbox ? "◇ AOI ACTIVE" : "◇ DRAW AOI"}
+            {filters.polygon ? "⬡ POLYGON AOI" : filters.bbox ? "◇ BBOX AOI" : "◇ DRAW AOI"}
           </button>
-          {filters.bbox && onClearBbox && (
+          {(filters.bbox || filters.polygon) && onClearBbox && (
             <button
               onClick={onClearBbox}
               className="px-1.5 py-1 rounded text-[9px] bg-red-950/40 border border-red-800/60 text-red-400 hover:bg-red-900/40"
-              title="Clear AOI bounding box"
+              title="Clear active AOI filter"
             >
               ✕
             </button>

@@ -20,25 +20,42 @@ from db.models import Tile, Scene, Feedback
 from services.embeddings import embedding_service
 from services.vector_store import vector_store
 from services.ranking import compute_final_score
+from services.nlp_filter import parse_natural_language_query, compute_distance_km, ParsedQueryFilters
+from shapely.geometry import Point, Polygon, shape
 
 
-KNOWN_GAZETTEER = {
-    # Kolkata & New Town landmarks (Biswa Bangla Gate is in New Town, Kolkata ~88.47 / 22.58 - nearest Sentinel cluster ~88.26, 22.59)
-    "biswa bangla": {"lon": 88.262, "lat": 22.590, "name": "Biswa Bangla Gate (Kolkata New Town)"},
-    "biswabangla": {"lon": 88.262, "lat": 22.590, "name": "Biswa Bangla Gate (Kolkata New Town)"},
-    "new town": {"lon": 88.262, "lat": 22.590, "name": "New Town, Kolkata"},
-    "rajarhat": {"lon": 88.262, "lat": 22.590, "name": "Rajarhat, Kolkata"},
-    "kolkata": {"lon": 88.262, "lat": 22.590, "name": "Kolkata Region"},
-    "calcutta": {"lon": 88.262, "lat": 22.590, "name": "Kolkata Region"},
-    "hooghly": {"lon": 88.262, "lat": 22.590, "name": "Hooghly Basin, Kolkata"},
-    # Delhi & NCR
-    "delhi": {"lon": 77.2257, "lat": 28.5743, "name": "Delhi NCR"},
-    "yamuna": {"lon": 77.2257, "lat": 28.5743, "name": "Yamuna River Corridor, Delhi"},
-    "ncr": {"lon": 77.2257, "lat": 28.5743, "name": "Delhi NCR"},
-}
+def _parse_polygon_geometry(poly_input: Any) -> Optional[Polygon]:
+    """Parse GeoJSON geometry dict, coordinates list, or WKT into Shapely Polygon."""
+    if poly_input is None:
+        return None
+    try:
+        if isinstance(poly_input, dict):
+            if poly_input.get("type") == "Feature":
+                return shape(poly_input["geometry"])
+            elif poly_input.get("type") == "Polygon":
+                return shape(poly_input)
+            elif "coordinates" in poly_input:
+                return Polygon(poly_input["coordinates"][0])
+        elif isinstance(poly_input, (list, tuple)):
+            if len(poly_input) > 0 and isinstance(poly_input[0], (list, tuple)):
+                # List of coords [[lon, lat], ...] or [[[lon, lat], ...]]
+                if isinstance(poly_input[0][0], (list, tuple)):
+                    return Polygon(poly_input[0])
+                return Polygon(poly_input)
+    except Exception:
+        pass
+    return None
 
 
-def _hits_to_results(hits, session, target_loc=None, w_semantic_only=False):
+def _hits_to_results(
+    hits,
+    session,
+    target_loc=None,
+    w_semantic_only=False,
+    aoi_polygon: Optional[Polygon] = None,
+    spatial_relation: Optional[Any] = None,
+    max_cloud: Optional[float] = None,
+):
     results = []
     tile_ids = [h.payload.get("tile_id") for h in hits if h.payload]
     tile_ids = [t for t in tile_ids if t]
@@ -59,16 +76,37 @@ def _hits_to_results(hits, session, target_loc=None, w_semantic_only=False):
         tile = tiles.get(tile_id_str)
         if tile is None:
             continue
+
+        # 1. Precise Geometric Polygon Filtering (Tier 1.1)
+        if aoi_polygon is not None:
+            tile_pt = Point(tile.lon, tile.lat)
+            if not aoi_polygon.contains(tile_pt) and not aoi_polygon.intersects(tile_pt):
+                continue
+
+        # 2. Quality / Cloud filtering from NL query
+        if max_cloud is not None and tile.cloud_fraction is not None and tile.cloud_fraction > max_cloud:
+            continue
+
         semantic_score = float(h.score)
 
-        # Geographic proximity relevance: if a specific place was mentioned in query
+        # 3. Spatial Proximity / Landmark relevance
         geo_relevance = 1.0
         loc_label = None
         if target_loc:
             dist_sq = (tile.lon - target_loc["lon"]) ** 2 + (tile.lat - target_loc["lat"]) ** 2
-            # Close match within ~0.2 deg has strong geo relevance, far distances get penalized
             geo_relevance = float(max(0.1, 1.0 - min(dist_sq / 0.5, 0.9)))
             loc_label = target_loc["name"]
+        elif spatial_relation is not None:
+            # Real geometric proximity (PostGIS / Shapely)
+            dist_km = compute_distance_km(tile.lon, tile.lat, spatial_relation.target)
+            if dist_km is not None:
+                max_d = spatial_relation.distance_km
+                if spatial_relation.relation_type == "within" and dist_km > max_d * 1.5:
+                    # Filter out or heavily penalize if beyond requested distance
+                    continue
+                # Proximity boost within range
+                geo_relevance = float(max(0.1, 1.0 - min(dist_km / (max_d * 2.0), 0.9)))
+                loc_label = f"{spatial_relation.resolved_feature_name or spatial_relation.target} ({dist_km:.1f} km)"
 
         final_score, breakdown = compute_final_score(
             semantic_score=semantic_score,
@@ -105,7 +143,6 @@ def _hits_to_results(hits, session, target_loc=None, w_semantic_only=False):
     return results
 
 
-
 def semantic_text_search(
     query: str,
     top_k: int = 20,
@@ -114,15 +151,34 @@ def semantic_text_search(
     date_to: Optional[str] = None,
     min_similarity: float = 0.0,
     aoi_bbox: Optional[tuple] = None,
+    aoi_polygon: Optional[Any] = None,
 ):
+    # Tier 1.2 — Natural-Language Filter Parsing
+    parsed = parse_natural_language_query(query)
+    effective_query = parsed.semantic_query or query
+
+    # Inherit parsed filters if not explicitly provided
+    if sensor is None and parsed.sensor:
+        sensor = parsed.sensor
+    if date_from is None and parsed.date_from:
+        date_from = parsed.date_from
+    if date_to is None and parsed.date_to:
+        date_to = parsed.date_to
+
+    # Tier 1.1 — AOI Polygon Geometry Parsing
+    shapely_poly = _parse_polygon_geometry(aoi_polygon)
+    if shapely_poly is not None and aoi_bbox is None:
+        # Compute polygon envelope for initial fast vector store bbox bounding
+        minx, miny, maxx, maxy = shapely_poly.bounds
+        aoi_bbox = (minx, miny, maxx, maxy)
+
     # Detect if user queried a known place / landmark
     q_lower = query.lower()
     target_loc = None
     for kw, loc in KNOWN_GAZETTEER.items():
         if kw in q_lower:
             target_loc = loc
-            # If no manual bbox was supplied, focus bounding box around the target region
-            if aoi_bbox is None:
+            if aoi_bbox is None and shapely_poly is None:
                 delta = 0.35
                 aoi_bbox = (
                     loc["lon"] - delta,
@@ -132,19 +188,43 @@ def semantic_text_search(
                 )
             break
 
-    emb = embedding_service.embed_text(query)
+    emb = embedding_service.embed_text(effective_query)
     hits = vector_store.search(
-        emb.vector, top_k=top_k, sensor=sensor, date_from=date_from,
+        emb.vector, top_k=top_k * 2 if shapely_poly is not None else top_k,
+        sensor=sensor, date_from=date_from,
         date_to=date_to, min_similarity=min_similarity, aoi_bbox=aoi_bbox,
     )
     with get_session() as session:
-        results = _hits_to_results(hits, session, target_loc=target_loc)
+        results = _hits_to_results(
+            hits,
+            session,
+            target_loc=target_loc,
+            aoi_polygon=shapely_poly,
+            spatial_relation=parsed.spatial_relation,
+            max_cloud=parsed.max_cloud_cover,
+        )
     return {
         "query": query,
+        "effective_semantic_query": effective_query,
         "embedding_model": emb.model_name,
         "embedding_is_placeholder": emb.is_placeholder,
-        "results": results,
+        "parsed_filters": {
+            "semantic_query": parsed.semantic_query,
+            "spatial_relation": {
+                "type": parsed.spatial_relation.relation_type,
+                "target": parsed.spatial_relation.target,
+                "distance_km": parsed.spatial_relation.distance_km,
+                "resolved_name": parsed.spatial_relation.resolved_feature_name,
+            } if parsed.spatial_relation else None,
+            "date_from": parsed.date_from,
+            "date_to": parsed.date_to,
+            "max_cloud_cover": parsed.max_cloud_cover,
+            "sensor": parsed.sensor,
+            "explanation": parsed.explanation,
+        },
+        "results": results[:top_k],
         "target_location": target_loc,
+        "has_polygon_filter": shapely_poly is not None,
     }
 
 
@@ -156,16 +236,25 @@ def image_to_image_search(
     date_to: Optional[str] = None,
     min_similarity: float = 0.0,
     aoi_bbox: Optional[tuple] = None,
+    aoi_polygon: Optional[Any] = None,
 ):
+    shapely_poly = _parse_polygon_geometry(aoi_polygon)
+    if shapely_poly is not None and aoi_bbox is None:
+        minx, miny, maxx, maxy = shapely_poly.bounds
+        aoi_bbox = (minx, miny, maxx, maxy)
+
     emb = embedding_service.embed_image(image)
     hits = vector_store.search(
-        emb.vector, top_k=top_k, sensor=sensor, date_from=date_from,
+        emb.vector, top_k=top_k * 2 if shapely_poly is not None else top_k,
+        sensor=sensor, date_from=date_from,
         date_to=date_to, min_similarity=min_similarity, aoi_bbox=aoi_bbox,
     )
     with get_session() as session:
-        results = _hits_to_results(hits, session)
+        results = _hits_to_results(hits, session, aoi_polygon=shapely_poly)
     return {
         "embedding_model": emb.model_name,
         "embedding_is_placeholder": emb.is_placeholder,
-        "results": results,
+        "results": results[:top_k],
+        "has_polygon_filter": shapely_poly is not None,
     }
+

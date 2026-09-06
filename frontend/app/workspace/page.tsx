@@ -43,6 +43,9 @@ export default function WorkspacePage() {
     { id: "mumbai", name: "Mumbai (Coastal)", coords: [72.8777, 19.0760] as [number, number], query: "Dense coastal construction in Mumbai" },
   ], []);
 
+  const [parsedFilters, setParsedFilters] = useState<any>(null);
+  const [lastQuery, setLastQuery] = useState<string>("Sentinel-2 satellite observation");
+
   useEffect(() => {
     getSystemStatus()
       .then((systemStatus) => {
@@ -65,13 +68,18 @@ export default function WorkspacePage() {
     runTextSearch("Sentinel-2 satellite observation");
   }, []);
 
-  const runTextSearch = useCallback(async (query: string) => {
+  const runTextSearch = useCallback(async (query: string, currentFilters?: FilterState) => {
     setLoading(true);
     setSearchError(null);
+    setLastQuery(query);
+    const activeF = currentFilters ?? filters;
     try {
-      const res = await searchByText(query, filters, 20);
+      const res = await searchByText(query, activeF, 20);
       setResults(res.results);
       setPlaceholderWarning(res.embedding_is_placeholder);
+      if (res.parsed_filters) {
+        setParsedFilters(res.parsed_filters);
+      }
       if (res.target_location) {
         setCustomCenter([res.target_location.lon, res.target_location.lat]);
       } else if (res.results.length > 0) {
@@ -135,21 +143,28 @@ export default function WorkspacePage() {
       loc.coords[0] + delta,
       loc.coords[1] + delta,
     ];
-    setFilters((prev) => ({ ...prev, bbox }));
-    runTextSearch(loc.query);
-  }, [runTextSearch]);
+    const updated = { ...filters, bbox, polygon: undefined };
+    setFilters(updated);
+    runTextSearch(loc.query, updated);
+  }, [filters, runTextSearch]);
 
   const handleAoiDrawn = useCallback((bbox: [number, number, number, number]) => {
-    const updated = { ...filters, bbox };
+    const updated = { ...filters, bbox, polygon: undefined };
     setFilters(updated);
-    runTextSearch("New buildings near water in New Town, Kolkata");
-  }, [filters, runTextSearch]);
+    runTextSearch(lastQuery, updated);
+  }, [filters, lastQuery, runTextSearch]);
+
+  const handleAoiPolygonDrawn = useCallback((polygonGeoJson: { type: "Polygon"; coordinates: number[][][] }) => {
+    const updated = { ...filters, polygon: polygonGeoJson, bbox: undefined };
+    setFilters(updated);
+    runTextSearch(lastQuery, updated);
+  }, [filters, lastQuery, runTextSearch]);
 
   const handleClearBbox = useCallback(() => {
-    const updated = { ...filters, bbox: undefined };
+    const updated = { ...filters, bbox: undefined, polygon: undefined };
     setFilters(updated);
-    runTextSearch("New buildings near water in New Town, Kolkata");
-  }, [filters, runTextSearch]);
+    runTextSearch(lastQuery, updated);
+  }, [filters, lastQuery, runTextSearch]);
 
   // customCenter takes priority: set explicitly by search/gazetteer/AOI buttons.
   // When user clicks a tile, we also update customCenter to that tile's location.
@@ -247,6 +262,7 @@ export default function WorkspacePage() {
               onTextSearch={runTextSearch}
               onImageSearch={runImageSearch}
               loading={loading}
+              parsedFilters={parsedFilters}
             />
 
             {/* 2. Multi-Dimensional Filter Bar (AOI, Temporal, Cloud) */}
@@ -308,6 +324,7 @@ export default function WorkspacePage() {
             }}
             center={center}
             onAoiDrawn={handleAoiDrawn}
+            onAoiPolygonDrawn={handleAoiPolygonDrawn}
           />
         </div>
 

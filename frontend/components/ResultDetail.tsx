@@ -439,19 +439,23 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
         </div>
       )}
 
-      {/* Multi-temporal Change Timeline */}
+      {/* Multi-temporal Change Timeline (Tier 1.3) */}
       <ChangeTimeline
         earliestDate={change?.earliest_supported_observation?.slice(0, 10) ?? undefined}
         registrationConfidence={change?.registration?.correlation_after != null ? Math.round(change.registration.correlation_after * 100) : 0}
+        observations={change?.observations}
       />
 
-      {/* Explainable AI Evidence Panel */}
+      {/* Explainable AI Evidence Panel (Tier 1.4 & 1.5) */}
       <EvidencePanel
+        confidence={change?.confidence}
         reasons={change?.reasons}
         suppressionReasons={change?.suppression_reasons}
         registrationCorr={change?.registration?.correlation_after}
         dNdvi={selectedRegion?.mean_d_ndvi}
         dNdbi={selectedRegion?.mean_d_ndbi}
+        evidence={change?.evidence}
+        confounds={change?.confounds}
       />
 
       {/* Analyst Decision Action Bar */}

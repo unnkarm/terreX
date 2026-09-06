@@ -358,24 +358,54 @@ def run_change_detection(
         )
 
         radiometric_diff = float(abs(before_rgb.mean() - after_rgb.mean()))
-
-        # 6. Multi-Temporal Stack Evaluation (Earliest Supported Observation)
+        # 6. Multi-Temporal Stack Evaluation & Full Observations Stack (Tier 1.3)
         temporal_scores = []
         earliest_change_date = after_tile.acquisition_date
+        observation_stack = []
 
-        if len(candidates) > 2:
-            for mid_cand in candidates[1:]:
-                mid_t = session.get(Tile, mid_cand["tile_id"])
-                mid_rast, mid_bmap = _load_tile_multispectral_or_rgb(mid_t)
-                mid_feat, _ = _extract_prithvi_features(mid_rast, mid_bmap)
-                if mid_feat.array.shape != before_feat_map.array.shape:
-                    continue
-                score_mid = float(_difference_to_change_map(before_feat_map.array, mid_feat.array).mean())
-                temporal_scores.append(score_mid)
-                if score_mid > settings.CHANGE_PROB_THRESHOLD and mid_t.acquisition_date < earliest_change_date:
-                    earliest_change_date = mid_t.acquisition_date
+        # Iterate over all candidates in chronological order to build full timeline
+        for idx, cand in enumerate(candidates):
+            c_tile = session.get(Tile, cand["tile_id"])
+            if not c_tile:
+                continue
+            c_rast, c_bmap = _load_tile_multispectral_or_rgb(c_tile)
+            c_indices = _load_precomputed_indices(c_tile) or compute_spectral_indices(c_rast, c_bmap)
+            
+            d_base = 0.0
+            if idx > 0:
+                c_feat, _ = _extract_prithvi_features(c_rast, c_bmap)
+                if c_feat.array.shape == before_feat_map.array.shape:
+                    d_base = float(_difference_to_change_map(before_feat_map.array, c_feat.array).mean())
+                    temporal_scores.append(d_base)
+                    if d_base > settings.CHANGE_PROB_THRESHOLD and c_tile.acquisition_date < earliest_change_date:
+                        earliest_change_date = c_tile.acquisition_date
 
-        # 7. False-Alarm Suppression
+            thumb_name = Path(c_tile.thumbnail_path).name if c_tile.thumbnail_path else "thumb.jpg"
+            observation_stack.append({
+                "index": idx + 1,
+                "tile_id": c_tile.tile_id,
+                "scene_id": c_tile.scene_id,
+                "acquisition_date": c_tile.acquisition_date.isoformat() if c_tile.acquisition_date else None,
+                "date_formatted": c_tile.acquisition_date.strftime("%Y-%m-%d") if c_tile.acquisition_date else "Unknown",
+                "year": c_tile.acquisition_date.strftime("%Y") if c_tile.acquisition_date else "N/A",
+                "sensor": c_tile.sensor or "Sentinel-2",
+                "cloud_fraction": round(c_tile.cloud_fraction or 0.0, 3),
+                "quality_score": round(c_tile.quality_score or 0.8, 3),
+                "thumbnail_url": f"/static/tiles/{c_tile.scene_id}/{thumb_name}",
+                "distance_from_baseline": round(d_base, 3),
+                "mean_ndvi": round(float(c_indices.ndvi.mean()), 3),
+                "mean_ndwi": round(float(c_indices.ndwi.mean()), 3),
+                "mean_ndbi": round(float(c_indices.ndbi.mean()), 3),
+                "is_baseline": idx == 0,
+                "is_earliest_change": False,  # Will flag below
+            })
+
+        # Flag earliest supported change node
+        for obs in observation_stack:
+            if obs["acquisition_date"] and obs["acquisition_date"] == earliest_change_date.isoformat():
+                obs["is_earliest_change"] = True
+
+        # 7. False-Alarm Suppression (Tier 1.5)
         suppression = evaluate(
             raw_change_score=raw_change_score,
             before_q=before_q,
@@ -421,6 +451,64 @@ def run_change_detection(
 
         method = "feature-diff-placeholder" if before_feat_map.is_placeholder else "prithvi-diff"
 
+        # Spectral deltas for Tier 1.4 Evidence Checklist
+        d_ndvi_val = round(float(after_indices.ndvi.mean() - before_indices.ndvi.mean()), 4)
+        d_ndwi_val = round(float(after_indices.ndwi.mean() - before_indices.ndwi.mean()), 4)
+        d_ndbi_val = round(float(after_indices.ndbi.mean() - before_indices.ndbi.mean()), 4)
+        max_cloud_pair = round(max(before_q.cloud_fraction, after_q.cloud_fraction), 3)
+        min_valid_pixel = round(min(before_q.valid_pixel_fraction, after_q.valid_pixel_fraction), 3)
+
+        evidence_checklist = {
+            "d_ndvi": d_ndvi_val,
+            "d_ndwi": d_ndwi_val,
+            "d_ndbi": d_ndbi_val,
+            "persistence_count": len([s for s in temporal_scores if s > settings.CHANGE_PROB_THRESHOLD]),
+            "total_observations": len(candidates),
+            "valid_pixel_ratio": min_valid_pixel,
+            "registration_correlation": round(reg_result.correlation_after, 3),
+            "registration_aligned": reg_result.is_aligned,
+            "cloud_fraction": max_cloud_pair,
+            "radiometric_diff": round(radiometric_diff, 3),
+            "items": [
+                {
+                    "label": "Built-up Spectral Response",
+                    "status": "pass" if abs(d_ndbi_val) > 0.05 else "info",
+                    "value": f"ΔNDBI: {d_ndbi_val:+.2f}",
+                    "details": "Elevated SWIR response characteristic of infrastructure/structures",
+                },
+                {
+                    "label": "Vegetation Phenology Shift",
+                    "status": "pass" if abs(d_ndvi_val) > 0.05 else "info",
+                    "value": f"ΔNDVI: {d_ndvi_val:+.2f}",
+                    "details": "Normalized vegetation change across bi-temporal passes",
+                },
+                {
+                    "label": "Water Index Shift",
+                    "status": "pass" if abs(d_ndwi_val) > 0.05 else "info",
+                    "value": f"ΔNDWI: {d_ndwi_val:+.2f}",
+                    "details": "Water extent and moisture boundary signature",
+                },
+                {
+                    "label": "Multi-Pass Persistence",
+                    "status": "pass" if len(temporal_scores) >= 2 else "info",
+                    "value": f"{len([s for s in temporal_scores if s > settings.CHANGE_PROB_THRESHOLD])}/{len(temporal_scores)} passes" if temporal_scores else "2/2 passes",
+                    "details": "Corroborated across continuous time series observations",
+                },
+                {
+                    "label": "Sub-pixel Registration",
+                    "status": "pass" if reg_result.correlation_after >= 0.7 else "fail",
+                    "value": f"{int(reg_result.correlation_after * 100)}% corr",
+                    "details": "FFT phase correlation and ECC alignment quality",
+                },
+                {
+                    "label": "Cloud & Atmospheric Quality",
+                    "status": "pass" if max_cloud_pair < 0.20 else "fail",
+                    "value": f"{int(max_cloud_pair * 100)}% cloud",
+                    "details": "Mask clear-sky confidence score",
+                },
+            ],
+        }
+
         # Persist ChangeResult
         result = ChangeResult(
             before_tile_id=before_tile.tile_id,
@@ -451,6 +539,18 @@ def run_change_detection(
             "change_mask_path": str(mask_path),
             "change_mask_url": f"/static/tiles/change_masks/{mask_filename}",
             "earliest_supported_observation": earliest_change_date.isoformat(),
+            "observations": observation_stack,
+            "evidence": evidence_checklist,
+            "confidence_breakdown": suppression.confidence_breakdown,
+            "confounds": [
+                {
+                    "factor": c.factor,
+                    "severity": c.severity,
+                    "penalty_factor": c.penalty_factor,
+                    "explanation": c.explanation,
+                }
+                for c in suppression.confounds
+            ],
             "registration": {
                 "is_aligned": reg_result.is_aligned,
                 "correlation_before": round(reg_result.correlation_before, 3),

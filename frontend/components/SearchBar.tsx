@@ -2,6 +2,8 @@
 
 import React, { useState, useRef } from "react";
 
+import { ParsedFilters } from "@/lib/api";
+
 export type SearchMode = "semantic" | "image";
 
 interface Props {
@@ -10,6 +12,7 @@ interface Props {
   onModeChange?: (mode: SearchMode) => void;
   activeMode?: SearchMode;
   loading?: boolean;
+  parsedFilters?: ParsedFilters | null;
 }
 
 export default function SearchBar({
@@ -18,6 +21,7 @@ export default function SearchBar({
   onModeChange,
   activeMode,
   loading,
+  parsedFilters,
 }: Props) {
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -51,7 +55,7 @@ export default function SearchBar({
   };
 
   return (
-    <div className="flex max-h-[42vh] min-h-[220px] flex-col gap-2.5 overflow-y-auto w-full bg-neutral-950 border border-neutral-800 rounded-lg p-3 font-sans text-xs">
+    <div className="flex max-h-[46vh] min-h-[220px] flex-col gap-2.5 overflow-y-auto w-full bg-neutral-950 border border-neutral-800 rounded-lg p-3 font-sans text-xs">
       {/* Search Mode Switcher (Semantic vs Image) */}
       <div className="flex items-center gap-1 border-b border-neutral-800/80 pb-2">
         {modes.map((m) => {
@@ -98,7 +102,7 @@ export default function SearchBar({
               onChange={(e) => setQuery(e.target.value)}
               onFocus={() => setIsFocused(true)}
               onKeyDown={(e) => e.key === "Enter" && query.trim() && handleRunQuery(query.trim())}
-              placeholder='e.g. "new buildings near a river"'
+              placeholder='e.g. "large new structures within 5km of rivers after January 2024"'
               className="flex-1 bg-transparent px-3 py-2 text-xs text-white placeholder-neutral-500 outline-none font-sans font-light"
             />
 
@@ -110,6 +114,37 @@ export default function SearchBar({
               {loading ? "SEARCHING..." : "SEARCH"}
             </button>
           </div>
+
+          {/* Parsed Natural Language Intent Tags (Tier 1.2) */}
+          {parsedFilters && (parsedFilters.spatial_relation || parsedFilters.date_from || parsedFilters.date_to || parsedFilters.max_cloud_cover) && (
+            <div className="p-2 rounded bg-cyan-950/20 border border-cyan-800/40 space-y-1 font-mono text-[10px]">
+              <span className="text-[9px] uppercase tracking-wider text-cyan-400 font-bold block">
+                EXTRACTED QUERY CONSTRAINTS (GEO-SPATIAL + TEMPORAL):
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {parsedFilters.spatial_relation && (
+                  <span className="px-2 py-0.5 rounded bg-cyan-900/40 border border-cyan-600/50 text-cyan-300">
+                    📍 {parsedFilters.spatial_relation.type} {parsedFilters.spatial_relation.distance_km}km of {parsedFilters.spatial_relation.resolved_name || parsedFilters.spatial_relation.target}
+                  </span>
+                )}
+                {parsedFilters.date_from && (
+                  <span className="px-2 py-0.5 rounded bg-emerald-900/40 border border-emerald-600/50 text-emerald-300">
+                    📅 ≥ {parsedFilters.date_from}
+                  </span>
+                )}
+                {parsedFilters.date_to && (
+                  <span className="px-2 py-0.5 rounded bg-emerald-900/40 border border-emerald-600/50 text-emerald-300">
+                    📅 ≤ {parsedFilters.date_to}
+                  </span>
+                )}
+                {parsedFilters.max_cloud_cover != null && (
+                  <span className="px-2 py-0.5 rounded bg-amber-900/40 border border-amber-600/50 text-amber-300">
+                    ☁️ cloud &lt; {Math.round(parsedFilters.max_cloud_cover * 100)}%
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* 1-Click Suggestions */}
           <div className="space-y-1">
@@ -133,8 +168,6 @@ export default function SearchBar({
 
       {/* Image Search Mode */}
       {currentMode === "image" && (
-        <div
-          onClick={() => fileInputRef.current?.click()}
           className="border-2 border-dashed border-neutral-800 hover:border-emerald-500/60 rounded p-6 text-center cursor-pointer transition-colors bg-black/40 group"
         >
           <svg className="w-8 h-8 text-neutral-600 group-hover:text-emerald-400 mx-auto mb-2 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
