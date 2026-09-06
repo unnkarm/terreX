@@ -61,6 +61,27 @@ def on_startup():
 
     init_db()
     start_idle_unload_monitor()
+
+    # Automatically pre-load Sentinel granules if the database has no scenes yet
+    try:
+        from db.database import get_session
+        from db.models import Scene
+        from sqlalchemy import select, func
+        with get_session() as session:
+            count = session.scalar(select(func.count(Scene.scene_id))) or 0
+        if count == 0:
+            logger.info("Database empty on startup. Auto-ingesting Sentinel granules from data/incoming...")
+            from services.ingestion import ingest_file
+            targets = list(settings.INCOMING_DIR.glob("*.tif")) + list(settings.INCOMING_DIR.glob("*.tiff"))
+            for path in targets:
+                try:
+                    res = ingest_file(path)
+                    logger.info("Auto-ingested %s (scene %s, %d tiles)", path.name, res["scene_id"], res["tiles"])
+                except Exception as exc:
+                    logger.warning("Auto-ingest skipped %s: %s", path.name, exc)
+    except Exception as exc:
+        logger.warning("Startup scene auto-ingest check error: %s", exc)
+
     logger.info("TerreX backend ready. Model dir=%s Data dir=%s", settings.MODEL_DIR, settings.DATA_DIR)
 
 

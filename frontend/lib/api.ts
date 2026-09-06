@@ -28,11 +28,17 @@ export interface TextSearchResponse {
   embedding_model: string;
   embedding_is_placeholder: boolean;
   results: SearchResult[];
+  target_location?: {
+    lon: number;
+    lat: number;
+    name: string;
+  };
 }
 
 export interface ChangeRegionItem {
   region_id: number;
   change_type: string;
+  dynamics?: string; // "appearance" | "disappearance" | "expansion" | "contraction"
   confidence: number;
   area_pixels: number;
   area_m2: number;
@@ -50,6 +56,7 @@ export interface ChangeDetectionResponse {
   message?: string;
   change_id?: string;
   dominant_change_type?: string;
+  dominant_dynamics?: string;
   before?: any;
   after?: any;
   change_score?: number;
@@ -223,6 +230,8 @@ export async function searchByImage(file: File, filters: FilterState = {}, topK:
 
 export async function getDiscoveryClusters(
   tileId?: string,
+  lon?: number,
+  lat?: number,
   maxClusters: number = 4,
   topK: number = 20,
 ): Promise<DiscoveryResponse> {
@@ -231,6 +240,10 @@ export async function getDiscoveryClusters(
     top_k: String(topK),
   });
   if (tileId) params.set("tile_id", tileId);
+  if (lon !== undefined && lat !== undefined) {
+    params.set("lon", String(lon));
+    params.set("lat", String(lat));
+  }
   const res = await fetch(`${API_BASE}/api/discovery?${params.toString()}`);
   if (!res.ok) {
     const error = await res.json().catch(() => ({}));
@@ -250,19 +263,20 @@ export async function getReviewQueue(status?: ReviewQueueItem["status"], limit =
   return res.json();
 }
 
-export async function detectChange(lon: number, lat: number, dateFrom: string, dateTo: string): Promise<ChangeDetectionResponse> {
+export async function detectChange(lon: number, lat: number, dateFrom: string, dateTo: string, tileId?: string): Promise<ChangeDetectionResponse> {
   const params = new URLSearchParams({ lon: String(lon), lat: String(lat), date_from: dateFrom, date_to: dateTo });
+  if (tileId) params.set("tile_id", tileId);
   try {
     const res = await fetch(`${API_BASE}/api/change/detect?${params.toString()}`);
     if (res.ok) {
-      const data = await res.json();
-      if (data.status === "ok") return data;
+      return await res.json();
     }
-  } catch (err) {
-    console.warn("Backend change detect unavailable, using realistic intelligence response:", err);
+    const errData = await res.json().catch(() => ({}));
+    return { status: "error", message: errData.detail || `Change detection failed (${res.status})` };
+  } catch (err: any) {
+    console.warn("Backend change detect unavailable:", err);
+    return getDemoChangeResponse(lon, lat, dateFrom, dateTo);
   }
-
-  return getDemoChangeResponse(lon, lat, dateFrom, dateTo);
 }
 
 export async function submitFeedback(targetType: string, targetId: string, verdict: "confirm" | "reject", note?: string) {
@@ -339,7 +353,11 @@ export async function uploadFileAndIngest(file: File) {
 
 export function thumbnailUrl(path: string | null): string {
   if (!path) return "";
+  // Already a full URL
   if (path.startsWith("http") || path.startsWith("data:")) return path;
+  // Already a /static/ path served by the backend — just prepend the base
+  if (path.startsWith("/static/")) return `${API_BASE}${path}`;
+  // Windows / Linux filesystem path — extract the relative part after /data/
   const normalized = path.replace(/\\/g, "/");
   const marker = "/data/";
   const idx = normalized.indexOf(marker);

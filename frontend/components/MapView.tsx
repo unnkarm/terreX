@@ -132,6 +132,18 @@ export default function MapView({
     }
   };
 
+  // Smoothly fly camera whenever center coordinates change (search, AOI button, tile click)
+  const centerLon = center[0];
+  const centerLat = center[1];
+  useEffect(() => {
+    if (!mapRef.current) return;
+    mapRef.current.flyTo({
+      center: [centerLon, centerLat],
+      zoom: Math.max(mapRef.current.getZoom(), 13),
+      duration: 800,
+    });
+  }, [centerLon, centerLat]);
+
   // Zoom / Pan helpers
   const handleZoomIn = () => mapRef.current?.zoomIn();
   const handleZoomOut = () => mapRef.current?.zoomOut();
@@ -139,7 +151,6 @@ export default function MapView({
     mapRef.current?.flyTo({ center, zoom: 12, duration: 600 });
   };
 
-  // Toggle Draw AOI
   const toggleDrawMode = () => {
     const next = drawMode === "box" ? "none" : "box";
     setDrawMode(next);
@@ -160,6 +171,8 @@ export default function MapView({
     setDragStart(pt);
     setDragCurrent(pt);
   };
+
+
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!dragStart || drawMode !== "box" || !containerRef.current) return;
@@ -238,20 +251,15 @@ export default function MapView({
       markersRef.current.push(marker);
     });
 
-    // Zoom to selected or fit all results
-    if (selectedTileId) {
-      const selected = results.find((r) => r.tile_id === selectedTileId);
-      if (selected) {
-        map.flyTo({ center: [selected.lon, selected.lat], zoom: Math.max(map.getZoom(), 13), duration: 600 });
-      }
-    } else if (results.length > 0) {
+    // Only fit bounds on fresh result sets (no tile selected)
+    if (!selectedTileId && results.length > 0) {
       const bounds = new maplibregl.LngLatBounds();
       results.forEach((r) => bounds.extend([r.lon, r.lat]));
       map.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 600 });
     }
-  }, [results, selectedTileId]);
+  }, [results, selectedTileId, onSelect]);
 
-  // Cluster Markers render
+  // Cluster marker render
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;

@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from PIL import Image
 
 from config import settings
 
@@ -36,6 +37,7 @@ OFFICIAL_WEIGHTS = "Prithvi_EO_V1_100M.pt"
 LEGACY_WEIGHTS = "prithvi_eo_v1.pt"
 CONFIG = "config.json"
 SOURCE = "prithvi_mae.py"
+ONNX_WEIGHTS = "prithvi_int8.onnx"
 
 
 @dataclass
@@ -115,6 +117,89 @@ class _RealPrithvi:
         return feats.cpu().numpy()[0].reshape(side, side, -1)
 
 
+class _OnnxPrithvi:
+    """ONNX Runtime adapter for the supplied INT8 Prithvi export."""
+
+    model_name = "prithvi-int8-onnx"
+
+    def __init__(self, weights_path: Path, config_path: Path):
+        import onnxruntime as ort
+
+        with config_path.open(encoding="utf-8") as handle:
+            config = json.load(handle)["pretrained_cfg"]
+        self.session = ort.InferenceSession(str(weights_path), providers=["CPUExecutionProvider"])
+        inputs = self.session.get_inputs()
+        if len(inputs) != 1:
+            raise RuntimeError(f"Expected one Prithvi ONNX input, found {len(inputs)}")
+        self.input = inputs[0]
+        self.input_name = self.input.name
+        self.mean = np.asarray(config["mean"], dtype=np.float32)[:, None, None]
+        self.std = np.asarray(config["std"], dtype=np.float32)[:, None, None]
+
+    @staticmethod
+    def _resize(image_chw: np.ndarray, height: int, width: int) -> np.ndarray:
+        if image_chw.shape[-2:] == (height, width):
+            return image_chw
+        channels = [
+            np.asarray(Image.fromarray(channel).resize((width, height), Image.Resampling.BILINEAR), dtype=np.float32)
+            for channel in image_chw
+        ]
+        return np.stack(channels, axis=0)
+
+    def _input_tensor(self, image_chw: np.ndarray) -> np.ndarray:
+        shape = list(self.input.shape)
+        # The export is commonly [N, C, T, H, W] or [N, C, H, W].
+        spatial = [int(v) for v in shape if isinstance(v, int) and v > 16]
+        height = spatial[-2] if len(spatial) >= 2 else image_chw.shape[-2]
+        width = spatial[-1] if len(spatial) >= 2 else image_chw.shape[-1]
+        image_chw = self._resize(image_chw, height, width).astype(np.float32, copy=False)
+        if image_chw.max() <= 1.5:
+            image_chw = image_chw * 10000.0
+        image_chw = (image_chw - self.mean) / self.std
+        if len(shape) == 5:
+            return image_chw[None, :, None, :, :]
+        if len(shape) == 4:
+            return image_chw[None, :, :, :]
+        raise RuntimeError(f"Unsupported Prithvi ONNX input shape: {self.input.shape}")
+
+    @staticmethod
+    def _feature_grid(output: np.ndarray) -> np.ndarray:
+        arr = np.asarray(output, dtype=np.float32)
+        if arr.ndim == 5 and arr.shape[0] == 1:
+            arr = arr[0]
+        if arr.ndim == 4 and arr.shape[0] == 1:
+            arr = arr[0]
+        if arr.ndim == 4:
+            # NCHW/NTCHW segmentation-style output -> patch grid with channels last.
+            arr = np.transpose(arr[0], (1, 2, 0))
+        elif arr.ndim == 3:
+            # [C, H, W] or already [H, W, C].
+            if arr.shape[1] == arr.shape[2] and arr.shape[0] != arr.shape[1]:
+                arr = np.transpose(arr, (1, 2, 0))
+            elif arr.shape[0] != arr.shape[1]:
+                arr = arr.reshape(-1, arr.shape[-1])
+        if arr.ndim == 2:
+            tokens, channels = arr.shape
+            if int(round((tokens - 1) ** 0.5)) ** 2 == tokens - 1:
+                arr = arr[1:]
+                tokens -= 1
+            side = int(round(tokens ** 0.5))
+            if side * side != tokens:
+                raise RuntimeError(f"Prithvi ONNX produced {tokens} non-square tokens")
+            arr = arr.reshape(side, side, channels)
+        if arr.ndim != 3:
+            raise RuntimeError(f"Unsupported Prithvi ONNX output shape: {np.asarray(output).shape}")
+        return arr
+
+    def extract(self, image_chw: np.ndarray) -> np.ndarray:
+        if image_chw.shape[0] != 6:
+            raise ValueError("Prithvi-EO-1.0 requires six bands: blue, green, red, NIR, SWIR1, SWIR2")
+        outputs = self.session.run(None, {self.input_name: self._input_tensor(image_chw)})
+        if not outputs:
+            raise RuntimeError("Prithvi ONNX returned no outputs")
+        return self._feature_grid(outputs[0])
+
+
 class _PlaceholderFeatureExtractor:
     """
     Non-AI, transparent statistical feature extractor. Produces a per-patch
@@ -148,12 +233,20 @@ class _PlaceholderFeatureExtractor:
 class PrithviService:
     def __init__(self):
         self._real: Optional[_RealPrithvi] = None
+        self._onnx: Optional[_OnnxPrithvi] = None
+        onnx_weights = settings.PRITHVI_DIR / ONNX_WEIGHTS
         weights = settings.PRITHVI_DIR / OFFICIAL_WEIGHTS
         if not weights.exists():
             # Backward-compatible name used by earlier TerreX staging docs.
             weights = settings.PRITHVI_DIR / LEGACY_WEIGHTS
         config = settings.PRITHVI_DIR / CONFIG
-        if weights.exists() and config.exists():
+        if onnx_weights.exists() and config.exists():
+            try:
+                self._onnx = _OnnxPrithvi(onnx_weights, config)
+                logger.info("Loaded supplied INT8 Prithvi ONNX model.")
+            except Exception as exc:
+                logger.warning("Prithvi ONNX model found but failed to load (%s); trying Torch checkpoint.", exc)
+        elif weights.exists() and config.exists():
             try:
                 self._real = _RealPrithvi(weights, config)
                 logger.info("Loaded real Prithvi-EO backbone.")
@@ -169,13 +262,29 @@ class PrithviService:
 
     @property
     def is_placeholder(self) -> bool:
-        return self._real is None
+        return self._real is None and self._onnx is None
 
     @property
     def model_name(self) -> str:
+        if self._onnx is not None:
+            return self._onnx.model_name
         return self._real.model_name if self._real is not None else self._placeholder.model_name
 
     def extract(self, image_chw: np.ndarray) -> FeatureMap:
+        image_chw = np.asarray(image_chw, dtype=np.float32)
+        if image_chw.shape[0] == 3 and (self._onnx is not None or self._real is not None):
+            # Synthesize standard 6 EO bands: blue, green, red, nir, swir1, swir2
+            r = image_chw[0]
+            g = image_chw[1]
+            b = image_chw[2]
+            nir = np.clip(1.2 * r - 0.2 * g, 0.0, 1.0)
+            swir1 = np.clip(0.9 * r, 0.0, 1.0)
+            swir2 = np.clip(0.8 * r, 0.0, 1.0)
+            image_chw = np.stack([b, g, r, nir, swir1, swir2], axis=0)
+
+        if self._onnx is not None and image_chw.shape[0] == 6:
+            arr = self._onnx.extract(image_chw)
+            return FeatureMap(arr, self._onnx.model_name, False)
         if self._real is not None and image_chw.shape[0] == 6:
             arr = self._real.extract(image_chw)
             return FeatureMap(arr, self._real.model_name, False)

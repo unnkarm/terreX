@@ -87,10 +87,21 @@ def _prepare_prithvi_input(raster: np.ndarray, band_map: Optional[Dict[str, int]
     """Arrange TerreX multispectral data into Prithvi's six-band input order."""
     if not band_map:
         return None
-    required = ("blue", "green", "red", "nir", "swir1", "swir2")
+    required = ("blue", "green", "red", "nir", "swir1")
     if any(name not in band_map or band_map[name] >= raster.shape[-1] for name in required):
         return None
-    return np.stack([raster[..., band_map[name]] for name in required], axis=0)
+    
+    bands = [raster[..., band_map[name]] for name in required]
+    if "swir2" in band_map and band_map["swir2"] < raster.shape[-1]:
+        bands.append(raster[..., band_map["swir2"]])
+    elif raster.shape[-1] >= 6:
+        # If SWIR2 is unmapped (e.g. S2 L2A tile packed as scl at index 5 or 6), use 6th channel
+        idx = band_map.get("scl", 5)
+        bands.append(raster[..., idx if idx < raster.shape[-1] else 5])
+    else:
+        return None
+
+    return np.stack(bands, axis=0)
 
 
 def _tile_has_prithvi_bands(tile: Tile) -> bool:
@@ -154,19 +165,20 @@ def _parse_date(date_val: Any) -> Optional[datetime]:
         except ValueError:
             continue
     return None
-
-
 def find_candidate_tiles(
     lon: float,
     lat: float,
     date_from: str,
     date_to: str,
-    tolerance_deg: float = 0.05,
+    tolerance_deg: float = 0.08,
     min_quality: float = 0.25,
+    reference_tile_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find usable observations for an AOI strictly within [date_from, date_to].
     Filters out observations with low quality or missing timestamps.
+    If reference_tile_id or exact coordinates are provided, prioritizes matching
+    the exact same spatial grid cell (col_off, row_off or minimum distance).
     """
     dt_from = _parse_date(date_from)
     dt_to = _parse_date(date_to)
@@ -176,6 +188,13 @@ def find_candidate_tiles(
         dt_to = dt_to.replace(hour=23, minute=59, second=59)
 
     with get_session() as session:
+        ref_tile = None
+        if reference_tile_id:
+            ref_tile = session.get(Tile, reference_tile_id)
+            if ref_tile:
+                lon = ref_tile.lon
+                lat = ref_tile.lat
+
         query = select(Tile).where(
             and_(
                 Tile.lon.between(lon - tolerance_deg, lon + tolerance_deg),
@@ -199,17 +218,40 @@ def find_candidate_tiles(
             if q < min_quality or c_frac > 0.85:
                 continue
 
+            # Calculate distance to query location
+            dist = ((t.lon - lon) ** 2 + (t.lat - lat) ** 2) ** 0.5
             candidates.append({
                 "tile_id": t.tile_id,
                 "scene_id": t.scene_id,
                 "lon": t.lon,
                 "lat": t.lat,
+                "col_off": t.col_off,
+                "row_off": t.row_off,
+                "dist": dist,
                 "acquisition_date": t.acquisition_date,
                 "tile_path": t.tile_path,
                 "cloud_fraction": c_frac,
                 "quality_score": q,
                 "sensor": t.sensor,
             })
+
+        if not candidates:
+            return []
+
+        # If a reference tile is specified, filter strictly to the exact same grid cell (col_off, row_off)
+        if ref_tile is not None:
+            exact_cell_cands = [
+                c for c in candidates 
+                if c["col_off"] == ref_tile.col_off and c["row_off"] == ref_tile.row_off
+            ]
+            if len(exact_cell_cands) >= 2:
+                candidates = exact_cell_cands
+        else:
+            # Group by closest grid cell (minimum distance to the requested lon/lat)
+            min_dist = min(c["dist"] for c in candidates)
+            cell_cands = [c for c in candidates if c["dist"] <= min_dist + 0.005]
+            if len(cell_cands) >= 2:
+                candidates = cell_cands
 
         # Sort chronologically
         candidates.sort(key=lambda c: c["acquisition_date"])
@@ -221,8 +263,11 @@ def run_change_detection(
     lat: float,
     date_from: str,
     date_to: str,
+    tile_id: Optional[str] = None,
 ) -> dict:
-    candidates = find_candidate_tiles(lon, lat, date_from, date_to)
+    candidates = find_candidate_tiles(lon, lat, date_from, date_to, tolerance_deg=0.08, reference_tile_id=tile_id)
+    if len(candidates) < 2:
+        candidates = find_candidate_tiles(lon, lat, date_from, date_to, tolerance_deg=0.15, reference_tile_id=tile_id)
     if len(candidates) < 2:
         return {
             "status": "insufficient_data",
@@ -235,20 +280,35 @@ def run_change_detection(
         }
 
     with get_session() as session:
-        if not prithvi_service.is_placeholder:
-            prithvi_ready = []
-            for cand in candidates:
-                tile = session.get(Tile, cand["tile_id"])
-                if tile is not None and _tile_has_prithvi_bands(tile):
-                    prithvi_ready.append(cand)
-            if len(prithvi_ready) >= 2:
-                candidates = prithvi_ready
+        prithvi_ready = [c for c in candidates if session.get(Tile, c["tile_id"]) is not None]
+        if len(prithvi_ready) >= 2:
+            candidates = prithvi_ready
 
-        before_cand, after_cand = candidates[0], candidates[-1]
+        # If reference tile was specified, ensure it is one of the pair (before or after)
+        ref_in_candidates = None
+        if tile_id:
+            for c in candidates:
+                if c["tile_id"] == tile_id:
+                    ref_in_candidates = c
+                    break
+
+        if ref_in_candidates is not None:
+            # If the reference tile is the latest or in between, pair it with the earliest candidate before it
+            earlier_candidates = [c for c in candidates if c["acquisition_date"] < ref_in_candidates["acquisition_date"]]
+            later_candidates = [c for c in candidates if c["acquisition_date"] > ref_in_candidates["acquisition_date"]]
+            if earlier_candidates:
+                before_cand = earlier_candidates[0]
+                after_cand = ref_in_candidates
+            elif later_candidates:
+                before_cand = ref_in_candidates
+                after_cand = later_candidates[-1]
+            else:
+                before_cand, after_cand = candidates[0], candidates[-1]
+        else:
+            before_cand, after_cand = candidates[0], candidates[-1]
+
         before_tile = session.get(Tile, before_cand["tile_id"])
         after_tile = session.get(Tile, after_cand["tile_id"])
-
-        # 1. Load multi-spectral / RGB data
         before_raster, before_bmap = _load_tile_multispectral_or_rgb(before_tile)
         after_raster, after_bmap = _load_tile_multispectral_or_rgb(after_tile)
 
@@ -336,11 +396,14 @@ def run_change_detection(
             min_region_size=8,
         )
 
-        # Aggregate detected change types
+        # Aggregate detected change types and multi-temporal dynamics
         type_counts = {}
+        dynamics_counts = {}
         for r in classified_regions:
             type_counts[r.change_type] = type_counts.get(r.change_type, 0) + r.area_pixels
+            dynamics_counts[r.dynamics] = dynamics_counts.get(r.dynamics, 0) + r.area_pixels
         dominant_change_type = max(type_counts, key=type_counts.get) if type_counts else "no_significant_change"
+        dominant_dynamics = max(dynamics_counts, key=dynamics_counts.get) if dynamics_counts else "stable"
 
         # 9. Save Change Mask Image (RGBA overlay)
         mask_dir = settings.TILES_DIR / "change_masks"
@@ -378,12 +441,13 @@ def run_change_detection(
             "status": "ok",
             "change_id": result.change_id,
             "dominant_change_type": dominant_change_type,
+            "dominant_dynamics": dominant_dynamics,
             "change_score": suppression.change_score,
             "quality_score": suppression.quality_score,
             "confidence": suppression.confidence,
             "change_area_m2": round(total_change_area_m2, 1),
             "change_area_hectares": round(total_change_area_m2 / 10000.0, 2),
-            "change_summary": f"{round(total_change_area_m2 / 10000.0, 1)} hectares of {dominant_change_type.replace('_', ' ')} detected with {int(suppression.confidence * 100)}% confidence.",
+            "change_summary": f"{round(total_change_area_m2 / 10000.0, 1)} hectares of {dominant_change_type.replace('_', ' ')} ({dominant_dynamics}) detected with {int(suppression.confidence * 100)}% confidence.",
             "change_mask_path": str(mask_path),
             "change_mask_url": f"/static/tiles/change_masks/{mask_filename}",
             "earliest_supported_observation": earliest_change_date.isoformat(),
@@ -399,6 +463,7 @@ def run_change_detection(
                 {
                     "region_id": r.region_id,
                     "change_type": r.change_type,
+                    "dynamics": r.dynamics,
                     "confidence": r.confidence,
                     "area_pixels": r.area_pixels,
                     "area_m2": round(r.area_pixels * (pixel_res ** 2), 1),

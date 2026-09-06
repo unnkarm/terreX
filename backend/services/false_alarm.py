@@ -52,7 +52,7 @@ def evaluate(
         score *= 0.25
         reasons.append(
             f"High cloud/haze fraction detected (before={before_q.cloud_fraction:.2f}, "
-            f"after={after_q.cloud_fraction:.2f}) — change signal heavily discounted."
+            f"after={after_q.cloud_fraction:.2f}) - change signal heavily discounted."
         )
 
     # 2. Missing / invalid pixels
@@ -70,7 +70,7 @@ def evaluate(
         score *= 0.3
         reasons.append(
             f"Poor spatial registration between before/after imagery "
-            f"(correlation={registration_correlation:.2f}) — likely misalignment artefact."
+            f"(correlation={registration_correlation:.2f}) - likely misalignment artefact."
         )
 
     # 5. Extreme radiometric differences (e.g. different lighting/season, sensor gain)
@@ -81,7 +81,7 @@ def evaluate(
             "illumination/seasonal/sensor differences rather than ground change."
         )
 
-    # 6. Temporal consistency boost — real changes tend to persist
+    # 6. Temporal consistency boost - real changes tend to persist
     if temporal_series and len(temporal_series) >= 2:
         persistent = sum(1 for v in temporal_series if v > settings.CHANGE_PROB_THRESHOLD)
         if persistent >= max(2, len(temporal_series) - 1):
@@ -89,7 +89,7 @@ def evaluate(
             score = min(1.0, score + boost)
             reasons.append(
                 f"Change persists across {persistent}/{len(temporal_series)} additional "
-                "usable observations — confidence boosted."
+                "usable observations - confidence boosted."
             )
         elif persistent == 0:
             score *= 0.7

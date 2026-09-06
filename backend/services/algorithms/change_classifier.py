@@ -23,6 +23,7 @@ from services.algorithms.spectral import SpectralIndices, compute_spectral_delta
 class ChangeRegion:
     region_id: int
     change_type: str        # "construction" | "clearance" | "water_extent" | "road_development" | "unclassified"
+    dynamics: str           # "appearance" | "disappearance" | "expansion" | "contraction"
     confidence: float
     area_pixels: int
     centroid: Tuple[float, float]  # (x, y)
@@ -93,6 +94,7 @@ def classify_change_regions(
         mean_ndvi = float(d_ndvi[region_mask].mean())
         mean_ndwi = float(d_ndwi[region_mask].mean())
         mean_ndbi = float(d_ndbi[region_mask].mean())
+        before_ndbi_mean = float(before_indices.ndbi[region_mask].mean())
         after_ndbi_mean = float(after_indices.ndbi[region_mask].mean())
         after_ndwi_mean = float(after_indices.ndwi[region_mask].mean())
 
@@ -111,30 +113,33 @@ def classify_change_regions(
             elongation = aspect
 
         # -------------------------------------------------------------------
-        # 4-Class Classification Decision Logic
+        # 4-Class Classification Decision Logic + Multi-Temporal Dynamics
         # -------------------------------------------------------------------
 
         # 1. Road development: high linear elongation / aspect ratio + infrastructure/built signature
         if (elongation > 2.8 or (aspect > 3.0 and solidity < 0.6)) and (mean_ndbi > -0.15 or after_ndbi_mean > -0.10):
             change_type = "road_development"
+            dynamics = "appearance" if elongation > 3.5 else "expansion"
             conf = min(0.95, 0.65 + 0.05 * min(elongation, 6.0))
             rationale = (
                 f"High linear elongation ({elongation:.2f}) and spatial eccentricity "
-                f"indicates linear infrastructure / road corridor development."
+                f"indicates linear infrastructure / road corridor {dynamics}."
             )
 
         # 2. Construction: strong built-up / SWIR increase, positive post-event NDBI
         elif (mean_ndbi > 0.15) or (after_ndbi_mean > 0.0 and mean_ndbi > 0.04):
             change_type = "construction"
+            dynamics = "appearance" if before_ndbi_mean < -0.05 else "expansion"
             conf = min(0.95, 0.65 + 0.4 * max(mean_ndbi, 0.0) + 0.3 * max(-mean_ndvi, 0.0))
             rationale = (
-                f"Built-up index increase (ΔNDBI={mean_ndbi:+.2f}, post-event NDBI={after_ndbi_mean:+.2f}) "
-                f"with vegetation loss (ΔNDVI={mean_ndvi:+.2f}) indicates structural construction / built ground."
+                f"Built-up index increase (dNDBI={mean_ndbi:+.2f}, post-event NDBI={after_ndbi_mean:+.2f}) "
+                f"with vegetation loss (dNDVI={mean_ndvi:+.2f}) indicates structural construction / built {dynamics}."
             )
 
         # 3. Water-extent variation: strong shift in water index + water spectral signature (low SWIR/NDBI)
         elif (abs(mean_ndwi) > 0.15 or after_ndwi_mean > 0.10) and (after_ndbi_mean <= 0.0 or mean_ndbi <= 0.0):
             change_type = "water_extent"
+            dynamics = "expansion" if mean_ndwi > 0 else "contraction"
             direction = "expansion" if mean_ndwi > 0 else "contraction/recession"
             conf = min(0.95, 0.70 + abs(mean_ndwi))
             rationale = (
@@ -144,22 +149,25 @@ def classify_change_regions(
         # 4. Clearance: vegetation loss without high built-up signature
         elif mean_ndvi < -0.08:
             change_type = "clearance"
+            dynamics = "disappearance" if mean_ndvi < -0.15 else "expansion"
             conf = min(0.90, 0.60 + 0.5 * abs(mean_ndvi))
             rationale = (
-                f"Vegetation reduction (ΔNDVI={mean_ndvi:+.2f}) without structural built-up response "
-                f"(post-event NDBI={after_ndbi_mean:+.2f}) indicates land clearance, deforestation, or excavation."
+                f"Vegetation reduction (dNDVI={mean_ndvi:+.2f}) without structural built-up response "
+                f"(post-event NDBI={after_ndbi_mean:+.2f}) indicates land clearance or vegetation {dynamics}."
             )
 
         # 5. Default / unclassified
         else:
             change_type = "unclassified"
+            dynamics = "expansion" if mean_ndbi > 0 else "contraction"
             conf = 0.50
-            rationale = f"General ground spectral shift (ΔNDVI={mean_ndvi:+.2f}, ΔNDBI={mean_ndbi:+.2f})."
+            rationale = f"General ground spectral shift (dNDVI={mean_ndvi:+.2f}, dNDBI={mean_ndbi:+.2f})."
 
         results.append(
             ChangeRegion(
                 region_id=label_id,
                 change_type=change_type,
+                dynamics=dynamics,
                 confidence=round(conf, 3),
                 area_pixels=area,
                 centroid=(round(cx, 2), round(cy, 2)),

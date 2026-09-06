@@ -26,7 +26,7 @@ from rasterio.windows import Window
 from rasterio.warp import transform_bounds, transform
 from PIL import Image
 from shapely.geometry import box
-from geoalchemy2.shape import from_shape
+from sqlalchemy.orm import defer
 
 from config import settings
 from db.database import get_session
@@ -39,6 +39,15 @@ from services.quality import (
 from services.algorithms.spectral import compute_spectral_indices
 
 logger = logging.getLogger("terrex.ingestion")
+
+
+def safe_from_shape(shape, srid: int = 4326):
+    """Return a geometry value for the active DB backend.
+    Always returns a WKT string — compatible with both SQLite Text columns
+    and, for PostgreSQL/PostGIS, can be cast with ST_GeomFromText().
+    """
+    return shape.wkt
+
 
 MIN_DIMENSION = 64  # reject scenes smaller than this in either axis
 MIN_USABLE_FRACTION = 0.20
@@ -136,7 +145,6 @@ def _resolve_band_map(dataset: rasterio.DatasetReader, sensor_name: str) -> Dict
             mapping[name] = idx
         return mapping
 
-    # Check descriptions
     descriptions = dataset.descriptions
     if descriptions and any(descriptions):
         mapping = {}
@@ -149,11 +157,9 @@ def _resolve_band_map(dataset: rasterio.DatasetReader, sensor_name: str) -> Dict
         if len(mapping) >= 3:
             return mapping
 
-    # Fallback to sensor lookup or channel count defaults
     s_clean = sensor_name.lower().replace(" ", "").replace("_", "-")
     for known_sensor, bmap in DEFAULT_BAND_MAPS.items():
         if known_sensor in s_clean:
-            # Verify dataset has enough bands
             if all(v <= dataset.count for v in bmap.values()):
                 return bmap
 
@@ -171,7 +177,6 @@ def _resolve_band_map(dataset: rasterio.DatasetReader, sensor_name: str) -> Dict
 
 
 def _extract_sensor_and_date(dataset: rasterio.DatasetReader, filename: str) -> tuple[str, Optional[datetime]]:
-    """Extract sensor name and acquisition date from GDAL tags or filename conventions."""
     tags = dataset.tags()
     sensor = tags.get("SENSOR") or tags.get("SATELLITE") or tags.get("PLATFORM") or None
     date_str = tags.get("ACQUISITION_DATE") or tags.get("TIFFTAG_DATETIME") or tags.get("DATETIME")
@@ -208,7 +213,6 @@ def validate_dataset(dataset: rasterio.DatasetReader):
 
 
 def _validate_cog_artifact(path: Path) -> Dict[str, Any]:
-    """Validate retained GeoTIFF tiling/overviews without requiring network access."""
     try:
         with rasterio.open(path) as dataset:
             tiled = bool(dataset.profile.get("tiled", False))
@@ -223,7 +227,6 @@ def _read_tile_rgb_float(
     window: Window,
     band_map: Dict[str, int],
 ) -> np.ndarray:
-    """Read a windowed patch as float [0,1] HWC RGB array."""
     r_idx = band_map.get("red", 1)
     g_idx = band_map.get("green", min(2, dataset.count))
     b_idx = band_map.get("blue", min(3, dataset.count))
@@ -232,12 +235,12 @@ def _read_tile_rgb_float(
     g = dataset.read(g_idx, window=window).astype(np.float32)
     b = dataset.read(b_idx, window=window).astype(np.float32)
 
-    stack = np.stack([r, g, b], axis=0)  # (3, H, W)
+    stack = np.stack([r, g, b], axis=0)
     lo, hi = np.percentile(stack, [2, 98])
     if hi - lo < 1e-6:
         hi = lo + 1.0
     out = np.clip((stack - lo) / (hi - lo), 0.0, 1.0)
-    return np.transpose(out, (1, 2, 0))  # (H, W, 3)
+    return np.transpose(out, (1, 2, 0))
 
 
 def _compute_tile_bounds_wgs84(
@@ -247,9 +250,7 @@ def _compute_tile_bounds_wgs84(
     width: int,
     height: int,
 ) -> Tuple[float, float, float, float, float, float]:
-    """Derive exact WGS84 tile bounding box and center coordinate from dataset transform."""
     transform_mat = dataset.transform
-    # Top-left and bottom-right in dataset native CRS
     x0, y0 = rasterio.transform.xy(transform_mat, row_off, col_off, offset="ul")
     x1, y1 = rasterio.transform.xy(transform_mat, row_off + height, col_off + width, offset="lr")
 
@@ -276,7 +277,7 @@ def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
     started = time.perf_counter()
     source_hash = _file_sha256(path)
     with get_session() as existing_session:
-        existing_scene = existing_session.query(Scene).filter(Scene.source_hash == source_hash).first()
+        existing_scene = existing_session.query(Scene).options(defer(Scene.footprint)).filter(Scene.source_hash == source_hash).first()
         if existing_scene and existing_scene.status == "ingested":
             tile_count = len(existing_scene.tiles)
             logger.info("Skipping already indexed scene %s (%d tiles)", path.name, tile_count)
@@ -317,7 +318,7 @@ def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
                 cloud_fraction=0.0,
                 quality_score=1.0,
                 valid_pixel_fraction=1.0,
-                footprint=from_shape(footprint, srid=4326),
+                footprint=safe_from_shape(footprint, srid=4326),
                 processing_version=settings.PROCESSING_VERSION,
                 status="ingested",
                 source_hash=source_hash,
@@ -376,11 +377,6 @@ def _tile_and_index_windowed(
     session,
     band_map: Dict[str, int],
 ) -> dict:
-    """
-    Stream windowed chunks through memory, compute multispectral derivatives,
-    save thumbnail/pack, embed, and index in PostGIS + Qdrant.
-    Peak memory is bounded to tile_size x tile_size x bands.
-    """
     ts = settings.TILE_SIZE
     overlap = settings.TILE_OVERLAP
     step = ts - overlap
@@ -400,18 +396,15 @@ def _tile_and_index_windowed(
             tile_w = min(ts, dataset.width - col)
             tile_h = min(ts, dataset.height - row)
             if tile_h < ts // 2 or tile_w < ts // 2:
-                continue  # skip boundary slivers
+                continue
 
             window = Window(col_off=col, row_off=row, width=tile_w, height=tile_h)
             deterministic_id = _deterministic_tile_id(str(scene.source_hash or scene.scene_id), row, col, scene.acquisition_date)
-            if session.get(Tile, deterministic_id):
+            if session.query(Tile.tile_id).filter(Tile.tile_id == deterministic_id).first():
                 skipped += 1
                 continue
 
-            # 1. Read windowed RGB patch for thumbnail & quality
             rgb_patch = _read_tile_rgb_float(dataset, window, band_map)
-
-            # 2. Read full windowed bands for multi-spectral analysis
             bands_data = dataset.read(window=window).astype(np.float32)
 
             quality_mask, quality_summary = _quality_mask(bands_data, rgb_patch, band_map, scene.sensor or "", dataset.nodata)
@@ -430,14 +423,11 @@ def _tile_and_index_windowed(
             indices = compute_spectral_indices(bands_data, {k: v - 1 for k, v in band_map.items() if v <= bands_data.shape[0]})
             spectral_indices = {"ndvi_mean": float(indices.ndvi.mean()), "ndvi_std": float(indices.ndvi.std()), "ndwi_mean": float(indices.ndwi.mean()), "ndwi_std": float(indices.ndwi.std()), "ndbi_mean": float(indices.ndbi.mean()), "ndbi_std": float(indices.ndbi.std())}
 
-            # 3. Save RGB thumbnail
             img = Image.fromarray((rgb_patch * 255).astype(np.uint8))
             thumb_path = tile_dir / f"tile_{row}_{col}.png"
             img.save(thumb_path)
 
-            # 4. Save multi-spectral numpy pack for downstream change typing
             npz_path = tile_dir / f"tile_{row}_{col}.npz"
-            # 0-based band map for numpy array indexing
             np_band_map = {k: v - 1 for k, v in band_map.items() if v <= bands_data.shape[0]}
             np.savez_compressed(
                 npz_path,
@@ -449,13 +439,11 @@ def _tile_and_index_windowed(
                 ndbi=indices.ndbi.astype(np.float32),
             )
 
-            # 5. Accurate geospatial bounding box
             min_lon, min_lat, max_lon, max_lat, center_lon, center_lat = _compute_tile_bounds_wgs84(
                 dataset, col, row, tile_w, tile_h
             )
             tile_poly = box(min_lon, min_lat, max_lon, max_lat)
 
-            # 6. Generate embedding
             emb = embedding_service.embed_image(img)
 
             tile = Tile(
@@ -466,7 +454,7 @@ def _tile_and_index_windowed(
                 tile_size=int(max(tile_h, tile_w)),
                 lon=float(center_lon),
                 lat=float(center_lat),
-                geometry=from_shape(tile_poly, srid=4326),
+                geometry=safe_from_shape(tile_poly, srid=4326),
                 acquisition_date=scene.acquisition_date,
                 sensor=scene.sensor,
                 resolution_m=float(scene.resolution_m) if scene.resolution_m is not None else None,
@@ -481,6 +469,7 @@ def _tile_and_index_windowed(
                 provenance={"source_scene_id": str(scene.scene_id), "source_filename": scene.source_filename, "acquisition_timestamp": scene.acquisition_date.isoformat() if scene.acquisition_date else None, "crs": scene.crs, "footprint_geometry": tile_poly.wkt, "quality_mask_summary": quality_summary, "radiometric_stats": radiometric_stats, "processing_steps": [{"step": "windowed_tiling", "params": {"size": ts}}, {"step": "quality_masking", "method": quality_summary.get("method", "heuristic")}, {"step": "embedding", "model": emb.model_name, "model_version": emb.model_version}], "ingest_timestamp": datetime.utcnow().isoformat(), "license_source": scene.license_source},
                 thumbnail_path=str(thumb_path),
                 tile_path=str(thumb_path),
+                embedding=emb.vector.tolist() if hasattr(emb.vector, "tolist") else list(emb.vector),
                 embedding_model=emb.model_name,
                 embedding_is_placeholder=bool(emb.is_placeholder),
                 embedding_model_version=emb.model_version,
@@ -489,16 +478,15 @@ def _tile_and_index_windowed(
             session.add(tile)
             session.flush()
 
-            # 7. Upsert into Qdrant vector index
             vector_store.upsert_tile(
                 tile_id=tile.tile_id,
                 vector=emb.vector,
-                payload={
+                sensor=scene.sensor,
+                acquisition_date=scene.acquisition_date.isoformat() if scene.acquisition_date else None,
+                lon=float(center_lon),
+                lat=float(center_lat),
+                extra_payload={
                     "scene_id": str(scene.scene_id),
-                    "lon": float(center_lon),
-                    "lat": float(center_lat),
-                    "sensor": scene.sensor,
-                    "acquisition_date": scene.acquisition_date.isoformat() if scene.acquisition_date else None,
                     "quality_score": float(patch_quality),
                     "cloud_fraction": float(patch_cloud),
                     "thumbnail_path": str(thumb_path),

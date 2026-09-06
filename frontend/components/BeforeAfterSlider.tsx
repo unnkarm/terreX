@@ -19,10 +19,10 @@ export default function BeforeAfterSlider({
   beforeImg,
   afterImg,
   maskImg,
-  beforeDate = "2024-05-20",
-  afterDate = "2026-05-18",
-  dominantChange = "CONSTRUCTION",
-  confidence = 0.89,
+  beforeDate = null,
+  afterDate = null,
+  dominantChange = null,
+  confidence = null,
 }: BeforeAfterSliderProps) {
   const [sliderPos, setSliderPos] = useState(50); // percentage 0 - 100
   const [mode, setMode] = useState<ViewMode>("SPLIT");
@@ -34,6 +34,13 @@ export default function BeforeAfterSlider({
 
   const bUrl = beforeImg ? thumbnailUrl(beforeImg) : fallbackBefore;
   const aUrl = afterImg ? thumbnailUrl(afterImg) : fallbackAfter;
+
+  // Resolve the mask image URL — it's served directly from the backend /static/ endpoint
+  const resolvedMaskUrl = maskImg
+    ? maskImg.startsWith("http") || maskImg.startsWith("/static")
+      ? maskImg
+      : `${maskImg}`
+    : null;
 
   const handleMove = (clientX: number) => {
     if (!containerRef.current) return;
@@ -98,7 +105,7 @@ export default function BeforeAfterSlider({
         onTouchStart={() => mode === "SPLIT" && setIsDragging(true)}
         className="relative w-full h-52 bg-black rounded overflow-hidden select-none cursor-ew-resize border border-neutral-800"
       >
-        {/* AFTER IMAGE (Base Layer) */}
+        {/* AFTER IMAGE (Base Layer — always visible except in BEFORE mode) */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={aUrl}
@@ -108,7 +115,7 @@ export default function BeforeAfterSlider({
           }`}
         />
 
-        {/* BEFORE IMAGE (Clipped overlay based on sliderPos) */}
+        {/* BEFORE IMAGE (Clipped overlay based on sliderPos in SPLIT mode) */}
         {mode === "SPLIT" && (
           <div
             className="absolute inset-0 overflow-hidden"
@@ -143,15 +150,27 @@ export default function BeforeAfterSlider({
           />
         )}
 
-        {/* CHANGE MASK HEATMAP OVERLAY */}
+        {/* CHANGE MASK HEATMAP OVERLAY — real PNG from backend or fallback gradient */}
         {(mode === "MASK" || mode === "SPLIT") && (
           <div
             className={`absolute inset-0 pointer-events-none transition-opacity ${
-              mode === "MASK" ? "opacity-90" : "opacity-35"
+              mode === "MASK" ? "opacity-95" : "opacity-40"
             }`}
           >
-            {/* Synthetic or Real Change Mask Heatmap Texture */}
-            <div className="w-full h-full bg-[radial-gradient(ellipse_at_center,rgba(239,68,68,0.75)_0%,rgba(234,179,8,0.4)_45%,transparent_70%)] mix-blend-screen" />
+            {resolvedMaskUrl ? (
+              // Real change probability map (grayscale PNG) from backend
+              // mix-blend-screen makes it glow on top of the imagery
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={resolvedMaskUrl}
+                alt="Change probability mask"
+                className="absolute inset-0 w-full h-full object-cover mix-blend-screen"
+                style={{ filter: "sepia(1) hue-rotate(-20deg) saturate(4) brightness(1.8)" }}
+              />
+            ) : (
+              // Fallback synthetic heatmap when no mask is available yet
+              <div className="w-full h-full bg-[radial-gradient(ellipse_at_center,rgba(239,68,68,0.75)_0%,rgba(234,179,8,0.4)_45%,transparent_70%)] mix-blend-screen" />
+            )}
           </div>
         )}
 
@@ -181,10 +200,10 @@ export default function BeforeAfterSlider({
       {/* Footer Metrics */}
       <div className="flex items-center justify-between text-[10px] font-mono text-neutral-400 pt-0.5">
         <span className="truncate">
-          DETECTED: <span className="text-white font-bold">{(dominantChange ?? "CONSTRUCTION").toUpperCase()}</span>
+          DETECTED: <span className="text-white font-bold">{dominantChange ? dominantChange.toUpperCase() : "N/A"}</span>
         </span>
         <span className="text-emerald-400 font-bold">
-          CONFIDENCE: {Math.round((confidence ?? 0.89) * 100)}%
+          CONFIDENCE: {confidence == null ? "N/A" : `${Math.round(confidence * 100)}%`}
         </span>
       </div>
     </div>

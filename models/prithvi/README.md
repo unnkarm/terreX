@@ -1,6 +1,7 @@
 # Staging Prithvi-EO
 
-TerreX's `backend/services/prithvi.py` looks for the official
+TerreX's `backend/services/prithvi.py` prefers the supplied
+`prithvi_int8.onnx` INT8 export, and otherwise looks for the official
 `Prithvi_EO_V1_100M.pt` checkpoint, `config.json`, and `prithvi_mae.py` in
 this directory. The legacy filename `prithvi_eo_v1.pt` is still accepted for
 older local setups.
@@ -15,6 +16,7 @@ UI shows a warning badge whenever a placeholder result is displayed.
 ## What to place here
 
 - `Prithvi_EO_V1_100M.pt` - model weights
+- `prithvi_int8.onnx` - preferred CPU ONNX Runtime model export
 - `config.json` - model config (patch size, layers, embed dim, bands, mean/std)
 - `prithvi_mae.py` - official Prithvi implementation used by the checkpoint
 
@@ -35,7 +37,7 @@ UI shows a warning badge whenever a placeholder result is displayed.
 3. For local Python, install `backend/requirements-ml.txt` in the backend
    environment.
 4. Restart the backend. `GET /api/system/status` should show
-   `models.prithvi.staged: true`.
+   `models.prithvi.staged: true` and `active_model: "prithvi-int8-onnx"`.
 
 The real Prithvi path only runs when both before and after observations have
 all six required bands in TerreX order: blue, green, red, NIR, SWIR1, SWIR2.

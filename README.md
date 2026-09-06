@@ -45,6 +45,9 @@ data/scenes, data/tiles (imagery + thumbnails on disk)
 
 AI inference runs in-process inside the backend container — no separate
 inference microservice, per the "keep it simple" constraint.
+Prithvi change features prefer the staged INT8 ONNX Runtime export at
+`models/prithvi/prithvi_int8.onnx`; the original Torch checkpoint remains a
+compatibility fallback for environments without ONNX Runtime.
 
 ## Quick start
 

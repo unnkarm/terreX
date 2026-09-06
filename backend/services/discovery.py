@@ -85,7 +85,13 @@ def _characteristics(sites: list[Tile]) -> list[str]:
     return characteristics or ["No additional metadata available"]
 
 
-def discover(tile_id: Optional[str] = None, max_clusters: int = 4, top_k: int = 20) -> dict:
+def discover(
+    tile_id: Optional[str] = None,
+    lon: Optional[float] = None,
+    lat: Optional[float] = None,
+    max_clusters: int = 4,
+    top_k: int = 20,
+) -> dict:
     if max_clusters < 1 or top_k < 1:
         raise DiscoveryError("max_clusters and top_k must be positive")
 
@@ -100,14 +106,23 @@ def discover(tile_id: Optional[str] = None, max_clusters: int = 4, top_k: int = 
     tile_ids = list(point_by_tile)
     with get_session() as session:
         session.expire_on_commit = False
+        from sqlalchemy.orm import defer
         tiles = {
             tile.tile_id: tile
-            for tile in session.execute(select(Tile).where(Tile.tile_id.in_(tile_ids))).scalars()
+            for tile in session.execute(select(Tile).options(defer(Tile.geometry)).where(Tile.tile_id.in_(tile_ids))).scalars()
         }
 
     usable = [point for point in points if point.get("tile_id") in tiles]
     if not usable:
         raise DiscoveryError("Indexed vectors have no matching tile metadata")
+
+    # If seed location (lon, lat) is given instead of tile_id, find closest tile
+    if not tile_id and lon is not None and lat is not None:
+        closest_point = min(
+            usable,
+            key=lambda p: (tiles[p["tile_id"]].lon - lon) ** 2 + (tiles[p["tile_id"]].lat - lat) ** 2
+        )
+        tile_id = closest_point["tile_id"]
 
     vectors = _normalise_vectors([point["vector"] for point in usable])
     if len(usable) == 1:
@@ -123,7 +138,7 @@ def discover(tile_id: Optional[str] = None, max_clusters: int = 4, top_k: int = 
 
     reference_index = None
     if tile_id:
-        reference_index = next(i for i, point in enumerate(usable) if point["tile_id"] == tile_id)
+        reference_index = next((i for i, point in enumerate(usable) if point["tile_id"] == tile_id), None)
 
     placeholder_flags = [bool(tiles[point["tile_id"]].embedding_is_placeholder) for point in usable]
     models = [tiles[point["tile_id"]].embedding_model for point in usable if tiles[point["tile_id"]].embedding_model]

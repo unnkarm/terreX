@@ -34,11 +34,21 @@ def get_engine():
     global _engine, _SessionLocal
     if _engine is None:
         db_url = settings.DATABASE_URL
-        # Fallback to sqlite if postgres is unreachable during standalone test runs
         if "sqlite" in db_url:
             _engine = create_engine(db_url, connect_args={"check_same_thread": False})
         else:
-            _engine = create_engine(db_url, pool_pre_ping=True)
+            try:
+                temp_engine = create_engine(db_url, pool_pre_ping=True)
+                with temp_engine.connect() as conn:
+                    pass
+                _engine = temp_engine
+            except Exception as exc:
+                sqlite_path = (settings.ROOT_DIR / "terrex.db").resolve()
+                logger.warning("PostgreSQL unreachable (%s). Falling back to SQLite %s", exc, sqlite_path)
+                sqlite_url = f"sqlite:///{sqlite_path.as_posix()}"
+                settings.DATABASE_URL = sqlite_url
+                _engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
+
         _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
     return _engine
 
@@ -60,7 +70,14 @@ def init_db():
                 conn.commit()
         except Exception as exc:
             logger.warning("Could not execute CREATE EXTENSION postgis: %s", exc)
-    Base.metadata.create_all(bind=engine)
+
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as exc:
+        if "sqlite" in str(engine.url):
+            logger.warning("SQLite DDL event warning (ignoring SpatiaLite geometry hook error): %s", exc)
+        else:
+            raise exc
     _ensure_ingestion_schema(engine)
 
 

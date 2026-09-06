@@ -20,6 +20,8 @@ def _bool(name: str, default: str = "true") -> bool:
 
 
 class Settings:
+    ROOT_DIR: Path = ROOT_DIR
+
     # --- Offline enforcement -------------------------------------------------
     OFFLINE_MODE: bool = _bool("OFFLINE_MODE", "true")
 

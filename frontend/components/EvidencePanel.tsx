@@ -15,17 +15,17 @@ interface EvidencePanelProps {
 }
 
 export default function EvidencePanel({
-  confidence = 0.91,
-  dNdvi = -0.38,
-  dNdbi = 0.42,
-  dNdwi = -0.05,
-  registrationCorr = 0.96,
-  cloudFraction = 0.03,
-  validPixelRatio = 0.98,
+  confidence,
+  dNdvi,
+  dNdbi,
+  dNdwi,
+  registrationCorr,
+  cloudFraction,
+  validPixelRatio,
   reasons,
   suppressionReasons,
 }: EvidencePanelProps) {
-  const confPercent = Math.round(confidence * 100);
+  const confPercent = confidence == null ? null : Math.round(confidence * 100);
 
   return (
     <div className="space-y-3 p-3.5 bg-neutral-950 border border-neutral-800 rounded font-sans text-xs">
@@ -38,7 +38,7 @@ export default function EvidencePanel({
           </span>
         </div>
         <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-800 text-emerald-400 font-mono font-bold text-xs">
-          CONFIDENCE: {confPercent}%
+          CONFIDENCE: {confPercent == null ? "N/A" : `${confPercent}%`}
         </span>
       </div>
 
@@ -54,7 +54,7 @@ export default function EvidencePanel({
               <span>Built-up index increased</span>
             </span>
             <span className="font-mono text-emerald-400 text-[10px]">
-              ΔNDBI: +{Math.abs(dNdbi).toFixed(2)}
+              ΔNDBI: {dNdbi == null ? "N/A" : `${dNdbi >= 0 ? "+" : ""}${dNdbi.toFixed(2)}`}
             </span>
           </div>
 
@@ -64,7 +64,7 @@ export default function EvidencePanel({
               <span>Vegetation decreased</span>
             </span>
             <span className="font-mono text-amber-400 text-[10px]">
-              ΔNDVI: -{Math.abs(dNdvi).toFixed(2)}
+              ΔNDVI: {dNdvi == null ? "N/A" : `${dNdvi >= 0 ? "+" : ""}${dNdvi.toFixed(2)}`}
             </span>
           </div>
 
@@ -74,7 +74,7 @@ export default function EvidencePanel({
               <span>Persistent across observations</span>
             </span>
             <span className="font-mono text-cyan-400 text-[10px]">
-              3 passes
+              {suppressionReasons?.length ? "Suppressed" : "Verified result"}
             </span>
           </div>
 
@@ -84,7 +84,7 @@ export default function EvidencePanel({
               <span>Good sub-pixel registration</span>
             </span>
             <span className="font-mono text-emerald-400 text-[10px]">
-              {Math.round(registrationCorr * 100)}% corr
+              {registrationCorr == null ? "N/A" : `${Math.round(registrationCorr * 100)}% corr`}
             </span>
           </div>
         </div>
@@ -102,7 +102,7 @@ export default function EvidencePanel({
               <span>Low cloud cover</span>
             </span>
             <span className="font-mono text-neutral-400 text-[10px]">
-              {Math.round(cloudFraction * 100)}%
+              {cloudFraction == null ? "N/A" : `${Math.round(cloudFraction * 100)}%`}
             </span>
           </div>
 
@@ -112,7 +112,7 @@ export default function EvidencePanel({
               <span>High valid-pixel ratio</span>
             </span>
             <span className="font-mono text-neutral-400 text-[10px]">
-              {Math.round(validPixelRatio * 100)}%
+              {validPixelRatio == null ? "N/A" : `${Math.round(validPixelRatio * 100)}%`}
             </span>
           </div>
 
