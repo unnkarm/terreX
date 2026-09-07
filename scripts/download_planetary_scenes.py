@@ -31,13 +31,15 @@ logger = logging.getLogger("terrex.planetary_downloader")
 STAC_SEARCH_URL = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
 SAS_SIGN_URL = "https://planetarycomputer.microsoft.com/api/sas/v1/sign"
 
-# Sentinel-2 bands to extract (10m & 20m resampled to 10m)
+# Sentinel-2 bands to extract (10m & 20m resampled to 10m).  The first six
+# map to Prithvi's HLS inputs; SCL is retained separately for cloud masking.
 TARGET_BANDS = [
     ("B02", "blue"),
     ("B03", "green"),
     ("B04", "red"),
     ("B08", "nir"),
     ("B11", "swir1"),
+    ("B12", "swir2"),
     ("SCL", "scl"),
 ]
 
@@ -53,24 +55,49 @@ def search_sentinel_scenes(
     bbox: List[float],
     date_range: str,
     max_cloud_cover: float = 15.0,
-    limit: int = 2,
+    limit: int = 1,
+    tile: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Search for Sentinel-2 L2A STAC items intersecting bbox within date range."""
+    """Search for Sentinel-2 L2A STAC items."""
+
+    query = {
+        "eo:cloud_cover": {"lt": max_cloud_cover}
+    }
+
+    # Keep the same Sentinel-2 MGRS tile for all years
+    if tile:
+        query["s2:mgrs_tile"] = {"eq": tile}
+
     payload = {
         "collections": ["sentinel-2-l2a"],
         "bbox": bbox,
         "datetime": date_range,
-        "query": {
-            "eo:cloud_cover": {"lt": max_cloud_cover}
-        },
-        "limit": limit * 2,
-        "sortby": [{"field": "properties.datetime", "direction": "desc"}],
+        "query": query,
+        "limit": 20,
+        "sortby": [
+            {"field": "properties.datetime", "direction": "desc"}
+        ],
     }
-    logger.info("Searching Planetary Computer STAC for Sentinel-2 scenes in %s (bbox=%s)...", date_range, bbox)
-    res = requests.post(STAC_SEARCH_URL, json=payload, timeout=30)
+
+    logger.info(
+        "Searching Planetary Computer STAC for Sentinel-2 scenes in %s...",
+        date_range
+    )
+
+    res = requests.post(
+        STAC_SEARCH_URL,
+        json=payload,
+        timeout=30
+    )
     res.raise_for_status()
+
     features = res.json().get("features", [])
-    logger.info("Found %d candidate scene(s).", len(features))
+
+    logger.info(
+        "Found %d candidate scene(s).",
+        len(features)
+    )
+
     return features[:limit]
 
 
@@ -227,16 +254,18 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.count < 1:
+        parser.error("--count must be at least 1")
 
     # Apply presets
     PRESETS = {
         "kolkata": {
             "bbox": [88.25, 22.45, 88.48, 22.65],  # Hooghly river & urban expansion (~35 km²)
-            "dates": ["2023-01-01", "2026-01-01"],
+            "dates": ["2023-01-01", "2026-09-04"],
         },
         "delhi": {
             "bbox": [77.18, 28.52, 77.32, 28.66],  # Yamuna riverbank & construction
-            "dates": ["2023-01-01", "2024-06-01"],
+            "dates": ["2023-01-01", "2026-09-04"],
         },
     }
 
@@ -248,12 +277,49 @@ def main():
     date_str = f"{selected_dates[0]}/{selected_dates[1]}"
     logger.info("Operating with preset '%s': BBox=%s, Window=%s", args.preset, selected_bbox, date_str)
 
-    items = search_sentinel_scenes(
-        bbox=selected_bbox,
-        date_range=date_str,
-        max_cloud_cover=args.max_cloud,
-        limit=args.count,
-    )
+    # Fetch at most one scene per calendar year.  The first result establishes
+    # the MGRS tile; all later searches are constrained to that tile so the
+    # resulting time series covers the same ground.
+    start = datetime.fromisoformat(selected_dates[0]).date()
+    end = datetime.fromisoformat(selected_dates[1]).date()
+    if end < start:
+        parser.error("--dates end date must not be earlier than the start date")
+
+    items = []
+    target_tile = None
+    years = range(start.year, end.year + 1)
+
+    for year in years:
+        if len(items) >= args.count:
+            break
+
+        range_start = max(start, datetime(year, 1, 1).date())
+        range_end = min(end, datetime(year, 12, 31).date())
+        year_range = f"{range_start.isoformat()}/{range_end.isoformat()}"
+
+        year_items = search_sentinel_scenes(
+            bbox=selected_bbox,
+            date_range=year_range,
+            max_cloud_cover=args.max_cloud,
+            limit=1,
+            tile=target_tile,
+        )
+
+        if year_items:
+            item = year_items[0]
+            items.append(item)
+            target_tile = target_tile or item.get("properties", {}).get("s2:mgrs_tile")
+            logger.info(
+                "Selected %s scene: %s (MGRS tile: %s)",
+                year,
+                item["id"],
+                target_tile or "unconstrained",
+            )
+        else:
+            logger.warning(
+                "No suitable Sentinel-2 scene found for %s.",
+                year
+            )
 
     if not items:
         logger.error("No low-cloud Sentinel-2 scenes found for the specified criteria.")
@@ -263,9 +329,9 @@ def main():
         dt_raw = item.get("properties", {}).get("datetime", f"scene_{idx}")
         clean_date = dt_raw[:10].replace("-", "")
         tile_name = f"Sentinel-2_{clean_date}_Planetary_{item['id'][:12]}.tif"
-        out_file = args.out_dir / tile_name
+        out_file = out_dir / tile_name
         try:
-            fetch_and_save_geotiff(item, args.bbox, out_file, max_dim=args.max_dim)
+            fetch_and_save_geotiff(item, selected_bbox, out_file, max_dim=args.max_dim)
         except Exception as err:
             logger.exception("Failed to fetch scene %s: %s", item["id"], err)
 

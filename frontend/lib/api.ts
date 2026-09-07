@@ -2,7 +2,7 @@
 // Base URL is injected at build/run time via NEXT_PUBLIC_API_URL so the
 // frontend never hardcodes a hostname (works in docker-compose and locally).
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 export interface SearchResult {
   tile_id: string;
@@ -23,16 +23,87 @@ export interface SearchResult {
   location_name?: string;
 }
 
+export interface ParsedFilters {
+  semantic_query?: string;
+  spatial_relation?: {
+    type: string;
+    target: string;
+    distance_km: number;
+    resolved_name?: string;
+  } | null;
+  date_from?: string | null;
+  date_to?: string | null;
+  max_cloud_cover?: number | null;
+  sensor?: string | null;
+  explanation?: string[];
+}
+
 export interface TextSearchResponse {
   query: string;
+  effective_semantic_query?: string;
   embedding_model: string;
   embedding_is_placeholder: boolean;
+  parsed_filters?: ParsedFilters;
   results: SearchResult[];
+  target_location?: {
+    lon: number;
+    lat: number;
+    name: string;
+  };
+  has_polygon_filter?: boolean;
+}
+
+export interface ChangeObservation {
+  index: number;
+  tile_id: string;
+  scene_id: string;
+  acquisition_date: string;
+  date_formatted: string;
+  year: string;
+  sensor: string;
+  cloud_fraction: number;
+  quality_score: number;
+  thumbnail_url: string;
+  distance_from_baseline: number;
+  mean_ndvi: number;
+  mean_ndwi: number;
+  mean_ndbi: number;
+  is_baseline: boolean;
+  is_earliest_change: boolean;
+}
+
+export interface EvidenceCheckItem {
+  label: string;
+  status: "pass" | "fail" | "info";
+  value: string;
+  details: string;
+}
+
+export interface EvidenceBundle {
+  d_ndvi: number;
+  d_ndwi: number;
+  d_ndbi: number;
+  persistence_count: number;
+  total_observations: number;
+  valid_pixel_ratio: number;
+  registration_correlation: number;
+  registration_aligned: boolean;
+  cloud_fraction: number;
+  radiometric_diff: number;
+  items: EvidenceCheckItem[];
+}
+
+export interface ConfoundItem {
+  factor: string;
+  severity: "high" | "medium" | "low";
+  penalty_factor: number;
+  explanation: string;
 }
 
 export interface ChangeRegionItem {
   region_id: number;
   change_type: string;
+  dynamics?: string; // "appearance" | "disappearance" | "expansion" | "contraction"
   confidence: number;
   area_pixels: number;
   area_m2: number;
@@ -50,6 +121,7 @@ export interface ChangeDetectionResponse {
   message?: string;
   change_id?: string;
   dominant_change_type?: string;
+  dominant_dynamics?: string;
   before?: any;
   after?: any;
   change_score?: number;
@@ -61,6 +133,17 @@ export interface ChangeDetectionResponse {
   change_mask_path?: string;
   change_mask_url?: string;
   earliest_supported_observation?: string;
+  observations?: ChangeObservation[];
+  evidence?: EvidenceBundle;
+  confidence_breakdown?: {
+    raw_change_score: number;
+    post_suppression_change_score: number;
+    combined_optical_quality: number;
+    final_confidence: number;
+    is_high_certainty: boolean;
+    confounds: ConfoundItem[];
+  };
+  confounds?: ConfoundItem[];
   registration?: {
     is_aligned: boolean;
     correlation_before: number;
@@ -132,6 +215,7 @@ export interface FilterState {
   dateTo?: string;
   minSimilarity?: number;
   bbox?: [number, number, number, number];
+  polygon?: [number, number][] | any;
   maxCloudCover?: number;
   changeTypes?: string[];
 }
@@ -145,6 +229,13 @@ export interface SimilarCluster {
   dominantType: string;
   characteristics: string[];
   sites: SearchResult[];
+}
+
+export interface DiscoveryResponse {
+  embedding_model: string | null;
+  embedding_is_placeholder: boolean;
+  total_candidates: number;
+  clusters: SimilarCluster[];
 }
 
 export interface ReviewQueueItem {
@@ -163,6 +254,9 @@ export interface ReviewQueueItem {
   thumbnailAfter?: string;
   notes?: string;
   reviewedAt?: string;
+  priority?: number;
+  evidence?: Record<string, unknown>;
+  feedback?: { confirm_count: number; reject_count: number; ranking_adjustment: number };
 }
 
 export async function searchByText(query: string, filters: FilterState = {}, topK: number = 20): Promise<TextSearchResponse> {
@@ -177,20 +271,20 @@ export async function searchByText(query: string, filters: FilterState = {}, top
     params.set("max_lon", String(filters.bbox[2]));
     params.set("max_lat", String(filters.bbox[3]));
   }
+  if (filters.polygon) {
+    params.set("polygon", JSON.stringify(filters.polygon));
+  }
   
   try {
     const res = await fetch(`${API_BASE}/api/search/text?${params.toString()}`);
     if (res.ok) {
-      const data = await res.json();
-      if (data.results && data.results.length > 0) {
-        return data;
-      }
+      return res.json();
     }
+    throw new Error(`Search failed: ${res.status}`);
   } catch (err) {
-    console.warn("Backend search endpoint unavailable or empty, falling back to intelligence mock:", err);
+    console.warn("Backend search endpoint unavailable:", err);
+    throw err;
   }
-
-  return getDemoSearchResults(query, filters);
 }
 
 export async function searchByImage(file: File, filters: FilterState = {}, topK: number = 20): Promise<TextSearchResponse> {
@@ -201,32 +295,69 @@ export async function searchByImage(file: File, filters: FilterState = {}, topK:
   if (filters.dateFrom) form.append("date_from", filters.dateFrom);
   if (filters.dateTo) form.append("date_to", filters.dateTo);
   if (filters.minSimilarity !== undefined) form.append("min_similarity", String(filters.minSimilarity));
+  if (filters.polygon) form.append("polygon", JSON.stringify(filters.polygon));
 
   try {
     const res = await fetch(`${API_BASE}/api/search/image`, { method: "POST", body: form });
     if (res.ok) {
       return res.json();
     }
+    throw new Error(`Image search failed: ${res.status}`);
   } catch (err) {
-    console.warn("Backend image search unavailable, falling back to demo:", err);
+    console.warn("Backend image search unavailable:", err);
+    throw err;
   }
-
-  return getDemoSearchResults("Visual reference match: " + file.name, filters);
 }
 
-export async function detectChange(lon: number, lat: number, dateFrom: string, dateTo: string): Promise<ChangeDetectionResponse> {
+export async function getDiscoveryClusters(
+  tileId?: string,
+  lon?: number,
+  lat?: number,
+  maxClusters: number = 4,
+  topK: number = 20,
+): Promise<DiscoveryResponse> {
+  const params = new URLSearchParams({
+    max_clusters: String(maxClusters),
+    top_k: String(topK),
+  });
+  if (tileId) params.set("tile_id", tileId);
+  if (lon !== undefined && lat !== undefined) {
+    params.set("lon", String(lon));
+    params.set("lat", String(lat));
+  }
+  const res = await fetch(`${API_BASE}/api/discovery?${params.toString()}`);
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || `Discovery failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function getReviewQueue(status?: ReviewQueueItem["status"], limit = 100): Promise<{ count: number; results: ReviewQueueItem[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) params.set("status", status);
+  const res = await fetch(`${API_BASE}/api/review?${params.toString()}`);
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || `Review queue failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function detectChange(lon: number, lat: number, dateFrom: string, dateTo: string, tileId?: string): Promise<ChangeDetectionResponse> {
   const params = new URLSearchParams({ lon: String(lon), lat: String(lat), date_from: dateFrom, date_to: dateTo });
+  if (tileId) params.set("tile_id", tileId);
   try {
     const res = await fetch(`${API_BASE}/api/change/detect?${params.toString()}`);
     if (res.ok) {
-      const data = await res.json();
-      if (data.status === "ok") return data;
+      return await res.json();
     }
-  } catch (err) {
-    console.warn("Backend change detect unavailable, using realistic intelligence response:", err);
+    const errData = await res.json().catch(() => ({}));
+    return { status: "error", message: errData.detail || `Change detection failed (${res.status})` };
+  } catch (err: any) {
+    console.warn("Backend change detect unavailable:", err);
+    return getDemoChangeResponse(lon, lat, dateFrom, dateTo);
   }
-
-  return getDemoChangeResponse(lon, lat, dateFrom, dateTo);
 }
 
 export async function submitFeedback(targetType: string, targetId: string, verdict: "confirm" | "reject", note?: string) {
@@ -303,7 +434,11 @@ export async function uploadFileAndIngest(file: File) {
 
 export function thumbnailUrl(path: string | null): string {
   if (!path) return "";
+  // Already a full URL
   if (path.startsWith("http") || path.startsWith("data:")) return path;
+  // Already a /static/ path served by the backend — just prepend the base
+  if (path.startsWith("/static/")) return `${API_BASE}${path}`;
+  // Windows / Linux filesystem path — extract the relative part after /data/
   const normalized = path.replace(/\\/g, "/");
   const marker = "/data/";
   const idx = normalized.indexOf(marker);
@@ -440,43 +575,6 @@ function downloadFile(content: string, filename: string, mimeType: string) {
   URL.revokeObjectURL(url);
 }
 
-function getDemoSearchResults(query: string, filters: FilterState = {}): TextSearchResponse {
-  const baseLocations = [
-    { name: "Yamuna Riverbank Sector 14", lat: 28.5684, lon: 77.2912, type: "NEW STRUCTURES", sub: "near river embankment", score: 0.94, date: "2026-05-18" },
-    { name: "Hindon River Canal Zone", lat: 28.6214, lon: 77.3821, type: "ROAD EXPANSION", sub: "corridor paving", score: 0.91, date: "2026-04-22" },
-    { name: "Okhla Wetland Perimeter", lat: 28.5392, lon: 77.3081, type: "WATER EXTENT CHANGE", sub: "reservoir variation", score: 0.88, date: "2026-06-02" },
-    { name: "Greater Noida Logistic Hub", lat: 28.4712, lon: 77.5104, type: "NEW WAREHOUSES", sub: "cleared vegetation", score: 0.86, date: "2026-05-30" },
-    { name: "Ghaziabad Industrial Belt", lat: 28.6692, lon: 77.4538, type: "FACILITY EXTENSION", sub: "heavy earthwork", score: 0.84, date: "2026-03-15" },
-    { name: "Surajpur Biodiversity Border", lat: 28.5284, lon: 77.4912, type: "VEGETATION CLEARANCE", sub: "perimeter development", score: 0.81, date: "2026-05-11" },
-  ];
-
-  const results: SearchResult[] = baseLocations.map((loc, i) => ({
-    tile_id: `tile-target-${i + 1}`,
-    scene_id: `scene-s2-2026-${i + 1}`,
-    lon: loc.lon,
-    lat: loc.lat,
-    similarity_score: loc.score,
-    final_score: loc.score * 0.98,
-    score_breakdown: { semantic: loc.score, quality: 0.95, cloud_penalty: 0.02 },
-    acquisition_date: loc.date,
-    sensor: i % 2 === 0 ? "Sentinel-2 MSI" : "Landsat-8 OLI",
-    quality_score: 0.94 - i * 0.02,
-    cloud_fraction: 0.02 + i * 0.01,
-    thumbnail_path: "https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=600&auto=format&fit=crop&q=80",
-    embedding_model: "remoteclip-vit-b32",
-    embedding_is_placeholder: false,
-    classification_label: loc.type,
-    location_name: loc.name,
-  }));
-
-  return {
-    query,
-    embedding_model: "remoteclip-vit-b32-airgapped",
-    embedding_is_placeholder: false,
-    results,
-  };
-}
-
 export function getDemoChangeResponse(lon: number, lat: number, dateFrom: string, dateTo: string): ChangeDetectionResponse {
   return {
     status: "ok",
@@ -484,12 +582,12 @@ export function getDemoChangeResponse(lon: number, lat: number, dateFrom: string
     change_id: "chg-" + Math.floor(lon * 100) + "-" + Math.floor(lat * 100),
     before: {
       acquisition_date: dateFrom || "2024-05-20",
-      thumbnail_path: "https://images.unsplash.com/photo-1581084324492-c8076f130f86?w=800&auto=format&fit=crop&q=80",
+      thumbnail_path: "/icon.svg",
       sensor: "Sentinel-2 MSI",
     },
     after: {
       acquisition_date: dateTo || "2026-05-18",
-      thumbnail_path: "https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=800&auto=format&fit=crop&q=80",
+      thumbnail_path: "/icon.svg",
       sensor: "Sentinel-2 MSI",
     },
     change_score: 0.89,
@@ -547,126 +645,6 @@ export function getDemoChangeResponse(lon: number, lat: number, dateFrom: string
       "Viewing-angle off-nadir mismatch compensated by homography warp",
     ],
   };
-}
-
-export function getDemoSimilarClusters(centerLon: number, centerLat: number): SimilarCluster[] {
-  return [
-    {
-      id: "cluster-01",
-      name: "Riverbank Built-Up Expansion",
-      count: 9,
-      centroid: [centerLon + 0.015, centerLat + 0.012],
-      confidence: 0.92,
-      dominantType: "Construction",
-      characteristics: ["Built-up expansion", "Near waterways", "Similar terrain", "High ΔNDBI profile"],
-      sites: [
-        {
-          tile_id: "c1-site-1", scene_id: "s2-2026-01", lon: centerLon + 0.012, lat: centerLat + 0.010,
-          similarity_score: 0.94, final_score: 0.93, score_breakdown: {}, acquisition_date: "2026-05-18",
-          sensor: "Sentinel-2", quality_score: 0.95, cloud_fraction: 0.02,
-          thumbnail_path: "https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=600&auto=format&fit=crop&q=80",
-          embedding_model: "remoteclip", embedding_is_placeholder: false, classification_label: "New Masonry Compound"
-        },
-        {
-          tile_id: "c1-site-2", scene_id: "s2-2026-02", lon: centerLon + 0.018, lat: centerLat + 0.015,
-          similarity_score: 0.91, final_score: 0.90, score_breakdown: {}, acquisition_date: "2026-05-18",
-          sensor: "Sentinel-2", quality_score: 0.93, cloud_fraction: 0.03,
-          thumbnail_path: "https://images.unsplash.com/photo-1581084324492-c8076f130f86?w=600&auto=format&fit=crop&q=80",
-          embedding_model: "remoteclip", embedding_is_placeholder: false, classification_label: "Industrial Foundation"
-        }
-      ]
-    },
-    {
-      id: "cluster-02",
-      name: "Transport Corridor & Paving",
-      count: 6,
-      centroid: [centerLon - 0.022, centerLat + 0.018],
-      confidence: 0.88,
-      dominantType: "Road Development",
-      characteristics: ["Linear corridor morphology", "Elongation > 3.5", "Aggregates & asphalt reflectance"],
-      sites: []
-    },
-    {
-      id: "cluster-03",
-      name: "Wetland Perimeter Variation",
-      count: 8,
-      centroid: [centerLon + 0.008, centerLat - 0.025],
-      confidence: 0.85,
-      dominantType: "Water Extent",
-      characteristics: ["High negative ΔNDWI", "Seasonal boundary shift", "Alluvial substrate"],
-      sites: []
-    },
-  ];
-}
-
-export function getDemoReviewQueue(): ReviewQueueItem[] {
-  return [
-    {
-      id: "rev-01",
-      targetId: "tile-target-1",
-      type: "Construction",
-      confidence: 0.94,
-      dateRange: "2025 → 2026",
-      location: "Yamuna River Embankment, Sector 14",
-      coordinates: [77.2912, 28.5684],
-      sensor: "Sentinel-2 MSI",
-      areaM2: 4820,
-      status: "pending",
-      evidenceCount: 4,
-    },
-    {
-      id: "rev-02",
-      targetId: "tile-target-2",
-      type: "Road development",
-      confidence: 0.91,
-      dateRange: "2024 → 2026",
-      location: "Hindon River Canal Link",
-      coordinates: [77.3821, 28.6214],
-      sensor: "Sentinel-2 MSI",
-      areaM2: 2310,
-      status: "pending",
-      evidenceCount: 3,
-    },
-    {
-      id: "rev-03",
-      targetId: "tile-target-3",
-      type: "Water variation",
-      confidence: 0.87,
-      dateRange: "2023 → 2026",
-      location: "Okhla Wetland Perimeter",
-      coordinates: [77.3081, 28.5392],
-      sensor: "Landsat-8 OLI",
-      areaM2: 8940,
-      status: "pending",
-      evidenceCount: 3,
-    },
-    {
-      id: "rev-04",
-      targetId: "tile-target-4",
-      type: "Vegetation clearance",
-      confidence: 0.84,
-      dateRange: "2025 → 2026",
-      location: "Surajpur Reserved Woodland",
-      coordinates: [77.4912, 28.5284],
-      sensor: "Sentinel-2 MSI",
-      areaM2: 6150,
-      status: "pending",
-      evidenceCount: 2,
-    },
-    {
-      id: "rev-05",
-      targetId: "tile-target-5",
-      type: "Construction",
-      confidence: 0.82,
-      dateRange: "2024 → 2026",
-      location: "Noida Sector 150 Perimeter",
-      coordinates: [77.4612, 28.4512],
-      sensor: "Cartosat-3",
-      areaM2: 3400,
-      status: "pending",
-      evidenceCount: 2,
-    },
-  ];
 }
 
 function getDemoScenes() {

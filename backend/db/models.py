@@ -1,25 +1,56 @@
 """
-SQLAlchemy ORM models for TerreX metadata store (PostgreSQL + PostGIS).
+SQLAlchemy ORM models for TerreX metadata store.
 
-Two core tables:
-  - scenes: one row per source GeoTIFF/COG (full provenance)
-  - tiles:  one row per tile cut from a scene (unit of search / indexing)
+Dual-mode design:
+  - Production: PostgreSQL + PostGIS — geometry columns use GeoAlchemy2 types.
+    The PostGIS path is opt-in via the TERREX_USE_POSTGIS=true env var.
+  - Development / local demo: SQLite — geometry stored as plain WKT Text.
+    This is the default when PostgreSQL is not available.
 
-A `feedback` table stores analyst confirm/reject actions (Feature 7).
-A `change_results` table stores computed change-detection results so they
-don't need to be recomputed for every request.
+We deliberately never import geoalchemy2 unless explicitly opted in, because
+importing it at all registers a global SQLAlchemy compile hook that wraps every
+geometry column in AsEWKB() — a PostGIS-only function that raises
+sqlite3.OperationalError on SQLite.
 """
+import os
 import uuid
 from datetime import datetime
 
-from geoalchemy2 import Geometry
 from sqlalchemy import (
     Column, String, Float, Integer, DateTime, ForeignKey, JSON, Boolean, Text
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
+
+# Opt-in PostGIS path — only activated by explicit env var *and* when
+# geoalchemy2 + psycopg2 are installed.
+_USE_POSTGIS = os.getenv("TERREX_USE_POSTGIS", "false").strip().lower() in ("1", "true", "yes")
+_PostGISGeom = None
+_PGUUIDType = None
+
+if _USE_POSTGIS:
+    try:
+        from geoalchemy2 import Geometry as _Geometry
+        from sqlalchemy.dialects.postgresql import UUID as _PGUUID
+        _PostGISGeom = _Geometry
+        _PGUUIDType = _PGUUID(as_uuid=False)
+    except ImportError:
+        _USE_POSTGIS = False
+
+
+def _geom_col(nullable: bool = True):
+    """Return a geometry Column, using PostGIS type or plain WKT Text."""
+    if _USE_POSTGIS and _PostGISGeom is not None:
+        return Column(_PostGISGeom(geometry_type="POLYGON", srid=4326), nullable=nullable)
+    return Column(Text, nullable=nullable)
+
+
+def _uuid_type():
+    """Return the appropriate UUID column type."""
+    if _USE_POSTGIS and _PGUUIDType is not None:
+        return _PGUUIDType
+    return String
 
 
 def gen_uuid():
@@ -30,7 +61,7 @@ class Scene(Base):
     """A single ingested GeoTIFF/COG — the unit of provenance."""
     __tablename__ = "scenes"
 
-    scene_id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    scene_id = Column(_uuid_type(), primary_key=True, default=gen_uuid)
     source_filename = Column(String, nullable=False)
     source_path = Column(String, nullable=False)
 
@@ -46,7 +77,7 @@ class Scene(Base):
     quality_score = Column(Float, nullable=True)
     valid_pixel_fraction = Column(Float, nullable=True)
 
-    footprint = Column(Geometry(geometry_type="POLYGON", srid=4326), nullable=True)
+    footprint = _geom_col(nullable=True)
 
     processing_version = Column(String, nullable=False)
     ingested_at = Column(DateTime, default=datetime.utcnow)
@@ -63,8 +94,8 @@ class Tile(Base):
     """A tile cut from a scene — the unit of embedding + search."""
     __tablename__ = "tiles"
 
-    tile_id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    scene_id = Column(UUID(as_uuid=False), ForeignKey("scenes.scene_id"), nullable=False)
+    tile_id = Column(_uuid_type(), primary_key=True, default=gen_uuid)
+    scene_id = Column(_uuid_type(), ForeignKey("scenes.scene_id"), nullable=False)
 
     row_off = Column(Integer, nullable=False)
     col_off = Column(Integer, nullable=False)
@@ -72,7 +103,7 @@ class Tile(Base):
 
     lon = Column(Float, nullable=False)
     lat = Column(Float, nullable=False)
-    geometry = Column(Geometry(geometry_type="POLYGON", srid=4326), nullable=False)
+    geometry = _geom_col(nullable=False)
 
     acquisition_date = Column(DateTime, nullable=True)
     sensor = Column(String, nullable=True)
@@ -85,7 +116,8 @@ class Tile(Base):
     thumbnail_path = Column(String, nullable=True)
     tile_path = Column(String, nullable=True)
 
-    embedding_model = Column(String, nullable=True)  # e.g. "remoteclip-v1" / "placeholder-hash"
+    embedding = Column(JSON, nullable=True)
+    embedding_model = Column(String, nullable=True)
     embedding_is_placeholder = Column(Boolean, default=False)
 
     processing_version = Column(String, nullable=False)
@@ -104,30 +136,30 @@ class ChangeResult(Base):
     """Cached change-detection result for an AOI + date pair."""
     __tablename__ = "change_results"
 
-    change_id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    before_tile_id = Column(UUID(as_uuid=False), ForeignKey("tiles.tile_id"), nullable=False)
-    after_tile_id = Column(UUID(as_uuid=False), ForeignKey("tiles.tile_id"), nullable=False)
+    change_id = Column(_uuid_type(), primary_key=True, default=gen_uuid)
+    before_tile_id = Column(_uuid_type(), ForeignKey("tiles.tile_id"), nullable=False)
+    after_tile_id = Column(_uuid_type(), ForeignKey("tiles.tile_id"), nullable=False)
 
-    change_score = Column(Float, nullable=False)       # raw model/feature-diff signal
-    quality_score = Column(Float, nullable=False)       # combined quality of both obs
-    confidence = Column(Float, nullable=False)          # final, after suppression
+    change_score = Column(Float, nullable=False)
+    quality_score = Column(Float, nullable=False)
+    confidence = Column(Float, nullable=False)
     change_area_m2 = Column(Float, nullable=True)
     change_mask_path = Column(String, nullable=True)
 
-    reasons = Column(JSON, nullable=True)               # list[str] explaining suppression/boost
-    method = Column(String, nullable=False)             # "prithvi-diff" | "feature-diff-placeholder"
+    reasons = Column(JSON, nullable=True)
+    method = Column(String, nullable=False)
     is_placeholder_model = Column(Boolean, default=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Feedback(Base):
-    """Analyst confirm/reject feedback (Feature 7)."""
+    """Analyst confirm/reject feedback."""
     __tablename__ = "feedback"
 
-    feedback_id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    feedback_id = Column(_uuid_type(), primary_key=True, default=gen_uuid)
     target_type = Column(String, nullable=False)   # "tile" | "change_result"
-    target_id = Column(UUID(as_uuid=False), nullable=False)
+    target_id = Column(_uuid_type(), nullable=False)
     verdict = Column(String, nullable=False)        # "confirm" | "reject"
     analyst = Column(String, nullable=True)
     note = Column(Text, nullable=True)

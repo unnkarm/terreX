@@ -1,20 +1,27 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
-import { ReviewQueueItem, getDemoReviewQueue, submitFeedback } from "@/lib/api";
+import { ReviewQueueItem, getReviewQueue, submitFeedback } from "@/lib/api";
 
 export default function ReviewQueuePage() {
-  const [queue, setQueue] = useState<ReviewQueueItem[]>(getDemoReviewQueue());
-  const [selectedItem, setSelectedItem] = useState<ReviewQueueItem | null>(queue[0] || null);
+  const [queue, setQueue] = useState<ReviewQueueItem[]>([]);
+  const [selectedItem, setSelectedItem] = useState<ReviewQueueItem | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [analystNote, setAnalystNote] = useState("");
   const [analystName, setAnalystName] = useState("ANALYST-ISRO-042");
-  const [auditLog, setAuditLog] = useState<Array<{ id: string; target: string; verdict: string; time: string; note?: string }>>([
-    { id: "aud-01", target: "Yamuna Embankment Link #03", verdict: "CONFIRMED", time: "10:14:20", note: "Structural foundation verified in 2 consecutive passes" },
-    { id: "aud-02", target: "Hindon Canal Sector 12", verdict: "REJECTED", time: "09:45:10", note: "Seasonal water table oscillation, suppressed" },
-  ]);
+  const [auditLog, setAuditLog] = useState<Array<{ id: string; target: string; verdict: string; time: string; note?: string }>>([]);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    getReviewQueue()
+      .then((response) => {
+        setQueue(response.results);
+        setSelectedItem(response.results[0] || null);
+      })
+      .catch((error) => setLoadError(error instanceof Error ? error.message : "Review queue unavailable"));
+  }, []);
 
   const handleDecision = async (verdict: "confirm" | "reject") => {
     if (!selectedItem) return;
@@ -157,7 +164,9 @@ export default function ReviewQueuePage() {
 
           {/* RIGHT PANEL: Verification Dossier & Decision (7 Cols) */}
           <div className="lg:col-span-7 rounded-lg bg-neutral-950 border border-neutral-800 p-6 flex flex-col justify-between space-y-6">
-            {selectedItem ? (
+            {loadError ? (
+              <div className="h-full flex items-center justify-center text-red-400 text-xs">{loadError}</div>
+            ) : selectedItem ? (
               <div className="space-y-5">
                 {/* Dossier Header */}
                 <div className="border-b border-neutral-800 pb-3 flex items-start justify-between">
@@ -190,7 +199,7 @@ export default function ReviewQueuePage() {
                     <div className="w-full h-32 rounded bg-neutral-900 border border-neutral-800 overflow-hidden relative">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src="https://images.unsplash.com/photo-1581084324492-c8076f130f86?w=600&auto=format&fit=crop&q=80"
+                        src="/icon.svg"
                         alt="baseline"
                         className="w-full h-full object-cover"
                       />
@@ -204,7 +213,7 @@ export default function ReviewQueuePage() {
                     <div className="w-full h-32 rounded bg-neutral-900 border border-neutral-800 overflow-hidden relative">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src="https://images.unsplash.com/photo-1528722828814-77b9b83aafb2?w=600&auto=format&fit=crop&q=80"
+                        src="/icon.svg"
                         alt="current"
                         className="w-full h-full object-cover"
                       />
@@ -261,7 +270,7 @@ export default function ReviewQueuePage() {
               </div>
             ) : (
               <div className="h-full flex items-center justify-center text-neutral-500 text-xs">
-                Select a candidate from the review queue on the left.
+                No change candidates are available for review.
               </div>
             )}
 

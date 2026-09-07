@@ -45,6 +45,9 @@ data/scenes, data/tiles (imagery + thumbnails on disk)
 
 AI inference runs in-process inside the backend container — no separate
 inference microservice, per the "keep it simple" constraint.
+Prithvi change features prefer the staged INT8 ONNX Runtime export at
+`models/prithvi/prithvi_int8.onnx`; the original Torch checkpoint remains a
+compatibility fallback for environments without ONNX Runtime.
 
 ## Quick start
 
@@ -70,6 +73,30 @@ full rebuild required.
 
 Open the dashboard at `http://localhost:3000`. The backend API is at
 `http://localhost:8000` (interactive docs at `http://localhost:8000/docs`).
+
+Chat uses the optional local Ollama service in the `chat` Compose profile.
+Before disconnecting the machine from the internet, preload the image and the
+configured model on that machine, for example with `docker pull
+ollama/ollama:latest`, then `docker compose --profile chat up -d ollama` and
+`docker exec terrex-ollama ollama pull qwen2.5:1.5b-instruct-q4_K_M`.
+Runtime chat makes no cloud calls. If the profile, image, or model is not
+staged, the API reports chat as unavailable rather than pretending it is
+operational. The default `docker compose up -d` remains usable offline without
+the optional chat image.
+
+The Compose backend installs the real RemoteCLIP/Prithvi runtime dependencies.
+Stage the licensed weights before starting it; model files are intentionally
+ignored by Git. The provided staging script verifies SHA-256 checksums against
+the upstream releases:
+
+```bash
+python scripts/stage_models.py
+```
+
+For a host-only backend, install `backend/requirements-ml.txt` as well. Once
+models are staged, re-ingest scenes that include B02, B03, B04, NIR, SWIR1,
+and SWIR2; legacy six-band files ending in SCL continue through the clearly
+labelled statistical fallback.
 
 Try a query like `new buildings near a river`, then click a result and run
 **Detect changes** between `2023-01-01` and `2024-01-01` — the synthetic

@@ -7,6 +7,7 @@ from services.embeddings import embedding_service
 from services.prithvi import prithvi_service
 from services.chat_agent import chat_status, maybe_unload_llm
 from services.vector_store import vector_store
+from services.capabilities import CAPABILITIES
 from db.database import get_session
 from db.models import Tile
 from sqlalchemy import select
@@ -41,10 +42,7 @@ def status():
             },
             "prithvi": {
                 "staged": not prithvi_service.is_placeholder,
-                "active_model": (
-                    "prithvi-eo-v1" if not prithvi_service.is_placeholder
-                    else prithvi_service._placeholder.model_name
-                ),
+                "active_model": prithvi_service.model_name,
             },
         },
         "paths": {
@@ -58,4 +56,5 @@ def status():
         "embedding_model_version": current_embedding_version,
         "stored_embedding_model_versions": stored_versions,
         "embedding_version_warning": embedding_version_warning,
+        "capabilities": CAPABILITIES,
     }

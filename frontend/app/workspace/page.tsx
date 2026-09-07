@@ -11,6 +11,7 @@ import ResultDetail from "@/components/ResultDetail";
 import ExportModal from "@/components/ExportModal";
 import {
   searchByText, searchByImage, getSystemStatus, listScenes,
+  getDiscoveryClusters,
   SearchResult, FilterState, SystemStatus,
 } from "@/lib/api";
 
@@ -30,16 +31,20 @@ export default function WorkspacePage() {
   const [isLeftOpen, setIsLeftOpen] = useState(true);
   const [isRightOpen, setIsRightOpen] = useState(true);
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
 
-  const [customCenter, setCustomCenter] = useState<[number, number] | null>([88.4754, 22.5867]); // Default Kolkata New Town
+  const [customCenter, setCustomCenter] = useState<[number, number] | null>([88.2619, 22.5905]); // Default Kolkata AOI
 
   const INDIAN_LOCATIONS = useMemo(() => [
-    { id: "kolkata", name: "Kolkata (New Town)", coords: [88.4754, 22.5867] as [number, number], query: "New buildings near water in New Town, Kolkata" },
-    { id: "delhi", name: "Delhi NCR (Yamuna)", coords: [77.2912, 28.5684] as [number, number], query: "Highways & construction along Yamuna corridor" },
+    { id: "kolkata", name: "Kolkata (Hooghly Basin)", coords: [88.2619, 22.5905] as [number, number], query: "Urban infrastructure & waterways in Kolkata" },
+    { id: "delhi", name: "Delhi NCR (Yamuna)", coords: [77.2257, 28.5743] as [number, number], query: "River corridor and expanding built-up settlements" },
     { id: "bengaluru", name: "Bengaluru (Outskirts)", coords: [77.6602, 12.8452] as [number, number], query: "Urban expansion & roads in Bengaluru outskirts" },
     { id: "ahmedabad", name: "Ahmedabad (Sabarmati)", coords: [72.5714, 23.0225] as [number, number], query: "Industrial development in Ahmedabad" },
     { id: "mumbai", name: "Mumbai (Coastal)", coords: [72.8777, 19.0760] as [number, number], query: "Dense coastal construction in Mumbai" },
   ], []);
+
+  const [parsedFilters, setParsedFilters] = useState<any>(null);
+  const [lastQuery, setLastQuery] = useState<string>("Sentinel-2 satellite observation");
 
   useEffect(() => {
     getSystemStatus()
@@ -47,25 +52,39 @@ export default function WorkspacePage() {
         setStatus(systemStatus);
         setHasData((systemStatus.vector_index_count ?? 0) > 0);
       })
-      .catch(() => setStatus(null));
+      .catch(() => {
+        setStatus(null);
+        setHasData(true);
+      });
 
     listScenes()
       .then((scenes) => {
         setSensors(Array.from(new Set(scenes.map((s: any) => s.sensor).filter(Boolean))));
+        if (scenes.length > 0) setHasData(true);
       })
       .catch(() => setSensors([]));
 
-    // Initial search focused on Kolkata New Town
-    runTextSearch("New buildings near water in New Town, Kolkata");
+    // Initial search automatically preloads all Sentinel observations
+    runTextSearch("Sentinel-2 satellite observation");
   }, []);
 
-  const runTextSearch = useCallback(async (query: string) => {
+  const runTextSearch = useCallback(async (query: string, currentFilters?: FilterState) => {
     setLoading(true);
     setSearchError(null);
+    setLastQuery(query);
+    const activeF = currentFilters ?? filters;
     try {
-      const res = await searchByText(query, filters, 20);
+      const res = await searchByText(query, activeF, 20);
       setResults(res.results);
       setPlaceholderWarning(res.embedding_is_placeholder);
+      if (res.parsed_filters) {
+        setParsedFilters(res.parsed_filters);
+      }
+      if (res.target_location) {
+        setCustomCenter([res.target_location.lon, res.target_location.lat]);
+      } else if (res.results.length > 0) {
+        setCustomCenter([res.results[0].lon, res.results[0].lat]);
+      }
       if (res.results.length > 0) {
         setSelected(res.results[0]);
         setIsRightOpen(true);
@@ -76,6 +95,27 @@ export default function WorkspacePage() {
       setLoading(false);
     }
   }, [filters]);
+
+  const handleFindSimilar = useCallback(async (seed: SearchResult) => {
+    setDiscoveryLoading(true);
+    try {
+      const discovery = await getDiscoveryClusters(seed.tile_id, seed.lon, seed.lat, 4, 20);
+      // Flatten all cluster sites into results queue (deduplicated by tile_id)
+      const allSites = discovery.clusters.flatMap((c) => c.sites);
+      const existingIds = new Set(results.map((r) => r.tile_id));
+      const newSites = allSites.filter((s) => !existingIds.has(s.tile_id));
+      setResults((prev) => [...prev, ...newSites]);
+      // Show the first new site in the detail panel
+      if (newSites.length > 0) {
+        setSelected(newSites[0]);
+        setIsRightOpen(true);
+      }
+    } catch (err: any) {
+      console.warn("Discovery failed:", err);
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  }, [results]);
 
   const runImageSearch = useCallback(async (file: File) => {
     setLoading(true);
@@ -103,28 +143,36 @@ export default function WorkspacePage() {
       loc.coords[0] + delta,
       loc.coords[1] + delta,
     ];
-    setFilters((prev) => ({ ...prev, bbox }));
-    runTextSearch(loc.query);
-  }, [runTextSearch]);
+    const updated = { ...filters, bbox, polygon: undefined };
+    setFilters(updated);
+    runTextSearch(loc.query, updated);
+  }, [filters, runTextSearch]);
 
   const handleAoiDrawn = useCallback((bbox: [number, number, number, number]) => {
-    const updated = { ...filters, bbox };
+    const updated = { ...filters, bbox, polygon: undefined };
     setFilters(updated);
-    runTextSearch("New buildings near water in New Town, Kolkata");
-  }, [filters, runTextSearch]);
+    runTextSearch(lastQuery, updated);
+  }, [filters, lastQuery, runTextSearch]);
+
+  const handleAoiPolygonDrawn = useCallback((polygonGeoJson: { type: "Polygon"; coordinates: number[][][] }) => {
+    const updated = { ...filters, polygon: polygonGeoJson, bbox: undefined };
+    setFilters(updated);
+    runTextSearch(lastQuery, updated);
+  }, [filters, lastQuery, runTextSearch]);
 
   const handleClearBbox = useCallback(() => {
-    const updated = { ...filters, bbox: undefined };
+    const updated = { ...filters, bbox: undefined, polygon: undefined };
     setFilters(updated);
-    runTextSearch("New buildings near water in New Town, Kolkata");
-  }, [filters, runTextSearch]);
+    runTextSearch(lastQuery, updated);
+  }, [filters, lastQuery, runTextSearch]);
 
+  // customCenter takes priority: set explicitly by search/gazetteer/AOI buttons.
+  // When user clicks a tile, we also update customCenter to that tile's location.
   const center: [number, number] = useMemo(() => {
-    if (selected) return [selected.lon, selected.lat];
     if (customCenter) return customCenter;
     if (results.length > 0) return [results[0].lon, results[0].lat];
-    return [88.4754, 22.5867]; // Kolkata New Town AOI
-  }, [selected, customCenter, results]);
+    return [88.2619, 22.5905]; // Kolkata New Town default
+  }, [customCenter, results]);
 
   return (
     <main className="h-screen w-screen flex flex-col bg-black font-sans relative overflow-hidden select-none">
@@ -141,7 +189,7 @@ export default function WorkspacePage() {
               </svg>
             </div>
             <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-400">Vector Index Empty</p>
-            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white md:text-3xl">Ingest data to access the dashboard</h2>
+            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-white md:text-3xl">Ingest data to access the workspace</h2>
             <p className="mx-auto mt-4 max-w-md text-sm leading-6 text-neutral-400">No satellite scenes are available in the local vector database yet. Add a scene to enable search, change detection, and evidence analysis.</p>
             <Link href="/ingest" className="mt-7 inline-flex items-center gap-3 border border-emerald-400 bg-emerald-500 px-5 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.15em] text-black transition-colors hover:bg-emerald-300">
               Add satellite data <span aria-hidden="true">&rarr;</span>
@@ -204,16 +252,17 @@ export default function WorkspacePage() {
         
         {/* LEFT COLUMN: Search & Filters & Ranked Results (390px) */}
         <div
-          className={`w-[390px] flex-shrink-0 h-full border-r border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 transition-transform duration-300 ${
-            isLeftOpen ? "translate-x-0" : "-translate-x-full"
+          className={`flex-shrink-0 h-full border-r border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 overflow-hidden transition-[width,transform] duration-300 ${
+            isLeftOpen ? "w-[390px] translate-x-0" : "w-0 -translate-x-full border-r-0"
           }`}
         >
-          <div className="flex flex-col h-full overflow-hidden p-3 gap-2.5">
+          <div className="flex flex-col h-full min-w-[390px] overflow-y-auto overflow-x-hidden p-3 gap-2.5">
             {/* 1. Intent-Aware SearchBar (Semantic Text & Reference Chip) */}
             <SearchBar
               onTextSearch={runTextSearch}
               onImageSearch={runImageSearch}
               loading={loading}
+              parsedFilters={parsedFilters}
             />
 
             {/* 2. Multi-Dimensional Filter Bar (AOI, Temporal, Cloud) */}
@@ -233,16 +282,18 @@ export default function WorkspacePage() {
             )}
 
             {/* 3. Ranked Candidate Results Queue */}
-            <div className="flex-1 min-h-0 rounded border border-neutral-800/80 overflow-hidden">
+            <div className="flex-none rounded border border-neutral-800/80 overflow-hidden">
               <ResultsList
                 results={results}
                 selectedTileId={selected?.tile_id ?? null}
                 onSelect={(r) => {
                   setSelected(r);
+                  setCustomCenter([r.lon, r.lat]);
                   setIsRightOpen(true);
                 }}
                 onInspect={(r) => {
                   setSelected(r);
+                  setCustomCenter([r.lon, r.lat]);
                   setIsRightOpen(true);
                 }}
                 placeholderWarning={placeholderWarning}
@@ -268,10 +319,12 @@ export default function WorkspacePage() {
             selectedTileId={selected?.tile_id ?? null}
             onSelect={(r) => {
               setSelected(r);
+              setCustomCenter([r.lon, r.lat]);
               setIsRightOpen(true);
             }}
             center={center}
             onAoiDrawn={handleAoiDrawn}
+            onAoiPolygonDrawn={handleAoiPolygonDrawn}
           />
         </div>
 
@@ -290,18 +343,26 @@ export default function WorkspacePage() {
         {/* RIGHT COLUMN: Site Inspection & Verification Panel (420px) */}
         {selected && (
           <div
-            className={`w-[420px] flex-shrink-0 h-full border-l border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 transition-transform duration-300 ${
-              isRightOpen ? "translate-x-0" : "translate-x-full"
+            className={`flex-shrink-0 h-full border-l border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 overflow-hidden transition-[width,transform] duration-300 ${
+              isRightOpen ? "w-[420px] translate-x-0" : "w-0 translate-x-full border-l-0"
             }`}
           >
             <ResultDetail
+              key={selected.tile_id}
               result={selected}
               onClose={() => setSelected(null)}
+              onFindSimilar={handleFindSimilar}
               onCitationClick={(citationId) => {
                 const cited = results.find((item) => item.tile_id === citationId);
                 if (cited) setSelected(cited);
               }}
             />
+            {discoveryLoading && (
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-neutral-900 border border-cyan-700/60 text-cyan-400 font-mono text-[10px] rounded shadow-lg z-50 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                DISCOVERING SIMILAR SITES...
+              </div>
+            )}
           </div>
         )}
 

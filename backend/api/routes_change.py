@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Body
+from fastapi import APIRouter, Query, Body, HTTPException
 from typing import Optional, List
 from pydantic import BaseModel
 
@@ -15,6 +15,7 @@ class ChangeDetectRequest(BaseModel):
     aoi: Optional[List[float]] = None  # [min_lon, min_lat, max_lon, max_lat] or [lon, lat]
     lon: Optional[float] = None
     lat: Optional[float] = None
+    tile_id: Optional[str] = None
     date_from: Optional[str] = "2023-01-01"
     date_to: Optional[str] = "2026-01-01"
 
@@ -25,20 +26,26 @@ def detect_change_get(
     lat: float = Query(...),
     date_from: str = Query(...),
     date_to: str = Query(...),
+    tile_id: Optional[str] = Query(None),
 ):
     """
     Run bi-temporal change detection for an AOI and date range.
     Returns co-registered change probability map, dominant change type,
     affected ground area in m2 and hectares, and explainable evidence checklist.
     """
-    return run_change_detection(lon=lon, lat=lat, date_from=date_from, date_to=date_to)
+    try:
+        return run_change_detection(lon=lon, lat=lat, date_from=date_from, date_to=date_to, tile_id=tile_id)
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/detect")
 def detect_change_post(payload: ChangeDetectRequest = Body(...)):
     """
     JSON POST endpoint for change detection.
-    Accepts { before_scene, after_scene, aoi } or { lon, lat, date_from, date_to }.
+    Accepts { before_scene, after_scene, aoi } or { lon, lat, date_from, date_to, tile_id }.
     """
     target_lon = payload.lon
     target_lat = payload.lat
@@ -65,4 +72,5 @@ def detect_change_post(payload: ChangeDetectRequest = Body(...)):
         lat=target_lat,
         date_from=date_from,
         date_to=date_to,
+        tile_id=payload.tile_id,
     )

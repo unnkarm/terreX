@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { SearchResult, SimilarCluster, getDemoSimilarClusters } from "@/lib/api";
+import { SearchResult, SimilarCluster, getDiscoveryClusters } from "@/lib/api";
 
 interface DiscoveryPanelProps {
   selectedSite: SearchResult | null;
@@ -17,18 +17,27 @@ export default function DiscoveryPanel({
   const [clusters, setClusters] = useState<SimilarCluster[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [activeClusterId, setActiveClusterId] = useState<string | null>(null);
+  const [candidateCount, setCandidateCount] = useState(0);
+  const [isPlaceholder, setIsPlaceholder] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const runDiscovery = () => {
+  const runDiscovery = async () => {
     setIsScanning(true);
-    setTimeout(() => {
-      const centerLon = selectedSite?.lon ?? 77.25;
-      const centerLat = selectedSite?.lat ?? 28.55;
-      const discovered = getDemoSimilarClusters(centerLon, centerLat);
-      setClusters(discovered);
-      setActiveClusterId(discovered[0]?.id ?? null);
-      if (discovered[0] && onSelectCluster) onSelectCluster(discovered[0]);
+    setError(null);
+    try {
+      const response = await getDiscoveryClusters(selectedSite?.tile_id);
+      setClusters(response.clusters);
+      setCandidateCount(response.total_candidates);
+      setIsPlaceholder(response.embedding_is_placeholder);
+      setActiveClusterId(response.clusters[0]?.id ?? null);
+      if (response.clusters[0] && onSelectCluster) onSelectCluster(response.clusters[0]);
+    } catch (err) {
+      setClusters([]);
+      setCandidateCount(0);
+      setError(err instanceof Error ? err.message : "Discovery request failed");
+    } finally {
       setIsScanning(false);
-    }, 600);
+    }
   };
 
   const activeCluster = clusters.find((c) => c.id === activeClusterId);
@@ -73,6 +82,7 @@ export default function DiscoveryPanel({
         >
           {isScanning ? "CLUSTERING HIGH-DIMENSIONAL EMBEDDINGS..." : "DISCOVER SIMILAR LOCATIONS"}
         </button>
+        {error && <p className="text-[11px] text-red-400 font-sans">{error}</p>}
       </div>
 
       {/* Discovery Pipeline Funnel Results */}
@@ -81,17 +91,24 @@ export default function DiscoveryPanel({
           <div className="grid grid-cols-3 gap-1.5 text-center">
             <div className="p-2 rounded bg-neutral-900 border border-neutral-800">
               <span className="text-[9px] text-neutral-500 block uppercase">Candidates</span>
-              <span className="text-xs font-bold text-neutral-200">127</span>
+              <span className="text-xs font-bold text-neutral-200">{candidateCount}</span>
             </div>
             <div className="p-2 rounded bg-neutral-900 border border-neutral-800">
               <span className="text-[9px] text-neutral-500 block uppercase">High Sim.</span>
-              <span className="text-xs font-bold text-cyan-400">34</span>
+              <span className="text-xs font-bold text-cyan-400">
+                {clusters.reduce((total, cluster) => total + cluster.sites.filter((site) => site.similarity_score >= 0.8).length, 0)}
+              </span>
             </div>
             <div className="p-2 rounded bg-cyan-950/30 border border-cyan-800/40">
               <span className="text-[9px] text-cyan-400 block uppercase">Clusters</span>
               <span className="text-xs font-bold text-white">{clusters.length}</span>
             </div>
           </div>
+          {isPlaceholder && (
+            <p className="text-[10px] text-amber-300 font-sans border border-amber-800/50 bg-amber-950/20 rounded p-2">
+              Results use placeholder visual embeddings, not semantic AI embeddings.
+            </p>
+          )}
 
           {/* Clusters List */}
           <div className="space-y-2">

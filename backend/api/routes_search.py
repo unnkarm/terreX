@@ -2,16 +2,53 @@ from __future__ import annotations
 
 import io
 import logging
-from typing import Optional
-
+import json
+from typing import Optional, Any, List, Dict
+from pydantic import BaseModel
 import numpy as np
-from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException, Body
 from PIL import Image
 
 from services.search import semantic_text_search, image_to_image_search
+from services.nlp_filter import parse_natural_language_query
 
 logger = logging.getLogger("terrex.api.search")
 router = APIRouter(prefix="/api/search", tags=["search"])
+
+
+class TextSearchRequest(BaseModel):
+    query: str
+    top_k: int = 20
+    sensor: Optional[str] = None
+    date_from: Optional[str] = None
+    date_to: Optional[str] = None
+    min_similarity: float = 0.0
+    min_lon: Optional[float] = None
+    min_lat: Optional[float] = None
+    max_lon: Optional[float] = None
+    max_lat: Optional[float] = None
+    aoi_polygon: Optional[Any] = None
+
+
+@router.get("/parse-query")
+def parse_query_endpoint(q: str = Query(..., description="Query to parse into structured filters")):
+    """Tier 1.2 NL filter parse endpoint."""
+    parsed = parse_natural_language_query(q)
+    return {
+        "raw_query": parsed.raw_query,
+        "semantic_query": parsed.semantic_query,
+        "spatial_relation": {
+            "type": parsed.spatial_relation.relation_type,
+            "target": parsed.spatial_relation.target,
+            "distance_km": parsed.spatial_relation.distance_km,
+            "resolved_name": parsed.spatial_relation.resolved_feature_name,
+        } if parsed.spatial_relation else None,
+        "date_from": parsed.date_from,
+        "date_to": parsed.date_to,
+        "max_cloud_cover": parsed.max_cloud_cover,
+        "sensor": parsed.sensor,
+        "explanation": parsed.explanation,
+    }
 
 
 def decode_image_bytes(contents: bytes) -> Image.Image:
@@ -98,13 +135,41 @@ def search_text(
     min_lat: Optional[float] = None,
     max_lon: Optional[float] = None,
     max_lat: Optional[float] = None,
+    polygon: Optional[str] = Query(None, description="GeoJSON polygon or coordinates JSON"),
 ):
     aoi_bbox = None
     if None not in (min_lon, min_lat, max_lon, max_lat):
         aoi_bbox = (min_lon, min_lat, max_lon, max_lat)
+    
+    aoi_poly = None
+    if polygon:
+        try:
+            aoi_poly = json.loads(polygon)
+        except Exception:
+            pass
+
     return semantic_text_search(
         query=q, top_k=top_k, sensor=sensor, date_from=date_from, date_to=date_to,
-        min_similarity=min_similarity, aoi_bbox=aoi_bbox,
+        min_similarity=min_similarity, aoi_bbox=aoi_bbox, aoi_polygon=aoi_poly,
+    )
+
+
+@router.post("/text")
+def search_text_post(req: TextSearchRequest = Body(...)):
+    """POST JSON endpoint for text search with arbitrary GeoJSON polygon filter."""
+    aoi_bbox = None
+    if None not in (req.min_lon, req.min_lat, req.max_lon, req.max_lat):
+        aoi_bbox = (req.min_lon, req.min_lat, req.max_lon, req.max_lat)
+
+    return semantic_text_search(
+        query=req.query,
+        top_k=req.top_k,
+        sensor=req.sensor,
+        date_from=req.date_from,
+        date_to=req.date_to,
+        min_similarity=req.min_similarity,
+        aoi_bbox=aoi_bbox,
+        aoi_polygon=req.aoi_polygon,
     )
 
 
@@ -116,13 +181,20 @@ async def search_image(
     date_from: Optional[str] = Form(None),
     date_to: Optional[str] = Form(None),
     min_similarity: float = Form(0.0),
+    polygon: Optional[str] = Form(None),
 ):
     try:
         contents = await file.read()
         image = decode_image_bytes(contents)
+        aoi_poly = None
+        if polygon:
+            try:
+                aoi_poly = json.loads(polygon)
+            except Exception:
+                pass
         return image_to_image_search(
             image=image, top_k=top_k, sensor=sensor, date_from=date_from,
-            date_to=date_to, min_similarity=min_similarity,
+            date_to=date_to, min_similarity=min_similarity, aoi_polygon=aoi_poly,
         )
     except HTTPException:
         raise
@@ -132,3 +204,4 @@ async def search_image(
             status_code=500,
             detail=f"Image search failed: {str(exc)}",
         )
+

@@ -17,3 +17,5 @@ models/change/*.pt
 powershell.cmd
 frontend/powershell.cmd
 *.tsbuildinfo
+*.db
+*.onnx

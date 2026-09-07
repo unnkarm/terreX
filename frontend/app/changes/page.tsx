@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import TopNav from "@/components/TopNav";
-import { ReviewQueueItem, getDemoReviewQueue } from "@/lib/api";
+import { ReviewQueueItem, getReviewQueue } from "@/lib/api";
 
 export default function ChangesDiscoveryPage() {
   const [dateFrom, setDateFrom] = useState("2022-01-01");
@@ -13,16 +13,23 @@ export default function ChangesDiscoveryPage() {
     "construction", "clearance", "water", "roads"
   ]);
   const [isScanning, setIsScanning] = useState(false);
-  const [scanComplete, setScanComplete] = useState(true);
-  const [candidates, setCandidates] = useState<ReviewQueueItem[]>(getDemoReviewQueue());
+  const [scanComplete, setScanComplete] = useState(false);
+  const [candidates, setCandidates] = useState<ReviewQueueItem[]>([]);
+  const [scanError, setScanError] = useState<string | null>(null);
 
-  const handleScan = () => {
+  const handleScan = async () => {
     setIsScanning(true);
-    setTimeout(() => {
-      setIsScanning(false);
+    setScanError(null);
+    try {
+      const response = await getReviewQueue("pending");
+      setCandidates(response.results);
       setScanComplete(true);
-      setCandidates(getDemoReviewQueue());
-    }, 800);
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : "Change queue unavailable");
+      setScanComplete(false);
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   const toggleType = (t: string) => {
@@ -75,9 +82,7 @@ export default function ChangesDiscoveryPage() {
                 AREA OF INTEREST (AOI)
               </span>
               <select className="w-full bg-black border border-neutral-800 focus:border-cyan-500 rounded p-2 text-white text-xs outline-none">
-                <option>Delhi NCR Corridor (18,420 km²)</option>
-                <option>Yamuna Floodplain Zone (4,210 km²)</option>
-                <option>Hindon River Basin (3,150 km²)</option>
+                <option>Kolkata ingested scene AOI</option>
                 <option>Custom Polygon AOI #01</option>
               </select>
             </div>
@@ -160,6 +165,7 @@ export default function ChangesDiscoveryPage() {
         </div>
 
         {/* Scan Summary Banner (Requirement 13) */}
+        {scanError && <div className="p-3 rounded border border-red-800/60 bg-red-950/30 text-red-300 font-mono text-xs">{scanError}</div>}
         {scanComplete && (
           <div className="space-y-4 font-mono">
             <div className="p-4 rounded-lg bg-neutral-950 border border-emerald-900/40 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -167,28 +173,17 @@ export default function ChangesDiscoveryPage() {
                 <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping" />
                 <div>
                   <h2 className="text-sm font-bold text-white uppercase tracking-wider">
-                    SCAN COMPLETE &mdash; 147 CANDIDATE CHANGES DETECTED
+                    SCAN COMPLETE &mdash; {candidates.length} CANDIDATE CHANGES DETECTED
                   </h2>
                   <p className="text-[11px] text-neutral-500 font-sans mt-0.5">
-                    AOI: Delhi NCR Corridor &middot; 2022 to 2026 stack &middot; False-alarm suppression applied
+                    AOI: Kolkata ingested scene &middot; {dateFrom} to {dateTo} stack &middot; Results from the local review queue
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 text-xs">
-                <span className="px-2.5 py-1 rounded bg-amber-950/40 border border-amber-800 text-amber-300">
-                  Construction: <strong>64</strong>
-                </span>
-                <span className="px-2.5 py-1 rounded bg-orange-950/40 border border-orange-800 text-orange-300">
-                  Clearance: <strong>31</strong>
-                </span>
-                <span className="px-2.5 py-1 rounded bg-cyan-950/40 border border-cyan-800 text-cyan-300">
-                  Water: <strong>28</strong>
-                </span>
-                <span className="px-2.5 py-1 rounded bg-blue-950/40 border border-blue-800 text-blue-300">
-                  Roads: <strong>24</strong>
-                </span>
-              </div>
+              <span className="px-2.5 py-1 rounded bg-cyan-950/40 border border-cyan-800 text-cyan-300 text-xs">
+                Pending: <strong>{candidates.length}</strong>
+              </span>
             </div>
 
             {/* Candidate Events Table */}

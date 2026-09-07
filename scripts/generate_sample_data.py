@@ -102,14 +102,19 @@ def _base_scene(rng: np.random.Generator, settlement_size: int, road_length: int
     return img
 
 
-def generate(n_dates: int = 5):
+def generate(n_dates: int = 8):
     rng = np.random.default_rng(42)
     transform = from_origin(ORIGIN_LON, ORIGIN_LAT, PIXEL_SIZE_DEG, PIXEL_SIZE_DEG)
-    dates = ["20230101", "20230401", "20230701", "20231001", "20240101"][:n_dates]
-    settlement_sizes = [40, 60, 90, 130, 170]  # Settlement expands over time
-    road_lengths = [0, 40, 90, 140, 200]       # Road develops over time
-    cloud_flags = [False, True, False, False, False] # Date 2 has cloud contamination
-    sensors = ["Sentinel-2", "Sentinel-2", "Sentinel-2", "Sentinel-2", "Sentinel-2"]
+    dates = [
+        "20230101", "20230601",
+        "20240101", "20240601",
+        "20250101", "20250601",
+        "20260101", "20260601"
+    ][:n_dates]
+    settlement_sizes = [40, 60, 90, 120, 150, 180, 210, 240]  # Progressive settlement expansion
+    road_lengths = [0, 40, 80, 120, 160, 200, 240, 280]       # Progressive road development
+    cloud_flags = [False, True, False, False, False, True, False, False]
+    sensors = ["Sentinel-2"] * len(dates)
 
     written = []
     for date, ssize, rlen, cloud, sensor in zip(dates, settlement_sizes, road_lengths, cloud_flags, sensors):

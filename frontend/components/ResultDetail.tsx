@@ -21,8 +21,21 @@ interface Props {
 type SpectralLayer = "RGB" | "MASK" | "NDVI" | "NDWI" | "NDBI" | "CONFIDENCE";
 
 export default function ResultDetail({ result, onClose, onFindSimilar, onCitationClick }: Props) {
-  const [dateFrom, setDateFrom] = useState("2024-05-20");
-  const [dateTo, setDateTo] = useState("2026-05-18");
+  // Dynamic date defaults: start 18 months before acquisition_date (min 2023-01-01), end today+6m
+  const [dateFrom, setDateFrom] = useState(() => {
+    if (result?.acquisition_date) {
+      const acq = new Date(result.acquisition_date);
+      acq.setMonth(acq.getMonth() - 18);
+      if (acq < new Date("2023-01-01")) return "2023-01-01";
+      return acq.toISOString().slice(0, 10);
+    }
+    return "2023-01-01";
+  });
+  const [dateTo, setDateTo] = useState(() => {
+    const future = new Date();
+    future.setMonth(future.getMonth() + 6);
+    return future.toISOString().slice(0, 10);
+  });
   const [change, setChange] = useState<ChangeDetectionResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState<string | null>(null);
@@ -40,6 +53,25 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
   const [isProvenanceOpen, setIsProvenanceOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
 
+  // When selected target changes, reset date controls and previous change analysis to fresh state
+  React.useEffect(() => {
+    if (!result) return;
+    setChange(null);
+    setFeedbackSent(null);
+    setAnalystNote("");
+    setSelectedRegionId(null);
+    if (result.acquisition_date) {
+      const acq = new Date(result.acquisition_date);
+      acq.setMonth(acq.getMonth() - 18);
+      setDateFrom(acq < new Date("2023-01-01") ? "2023-01-01" : acq.toISOString().slice(0, 10));
+    } else {
+      setDateFrom("2023-01-01");
+    }
+    const future = new Date();
+    future.setMonth(future.getMonth() + 6);
+    setDateTo(future.toISOString().slice(0, 10));
+  }, [result?.tile_id]);
+
   if (!result) {
     return (
       <div className="h-full flex items-center justify-center text-neutral-500 text-xs p-6 text-center font-mono">
@@ -52,7 +84,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
     setLoading(true);
     setFeedbackSent(null);
     try {
-      const res = await detectChange(result.lon, result.lat, dateFrom, dateTo);
+      const res = await detectChange(result.lon, result.lat, dateFrom, dateTo, result.tile_id);
       setChange(res);
       if (res.change_regions && res.change_regions.length > 0) {
         setSelectedRegionId(res.change_regions[0].region_id);
@@ -76,6 +108,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
   };
 
   const selectedRegion = change?.change_regions?.find((r) => r.region_id === selectedRegionId);
+  const changeReady = change?.status === "ok";
 
   return (
     <div className="relative h-full overflow-y-auto p-4 space-y-4 text-xs font-sans bg-neutral-950 text-neutral-300">
@@ -85,7 +118,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
             <h2 className="text-sm font-bold tracking-tight text-white font-sans uppercase">
-              Target Site <span className="text-neutral-400 font-light">Inspection</span>
+              Target Site <span className="text-cyan-400 font-medium">[{result.classification_label ?? "NEW STRUCTURES"}]</span>
             </h2>
             <span className="text-[9px] px-1.5 py-0.5 rounded bg-neutral-900 border border-neutral-700 text-cyan-400 font-mono font-bold">
               {result.sensor ?? "Sentinel-2"}
@@ -93,7 +126,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
           </div>
           <p className="text-[11px] text-neutral-400 font-mono mt-1">
             <span className="text-emerald-500 font-bold mr-1">&gt;</span>
-            {result.lat.toFixed(4)}°N, {result.lon.toFixed(4)}°E &middot; EPSG:32645
+            {result.lat.toFixed(4)}°N, {result.lon.toFixed(4)}°E &middot; <span className="text-neutral-500">{result.tile_id.slice(0, 8)}...</span>
           </p>
         </div>
 
@@ -165,9 +198,9 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
       {/* Metadata KPI Grid */}
       <div className="grid grid-cols-3 gap-px bg-neutral-800 border border-neutral-800 rounded overflow-hidden font-mono">
         <Field label="SEMANTIC MATCH" value={`${(result.similarity_score * 100).toFixed(1)}%`} highlight />
-        <Field label="DATA QUALITY" value={`${((result.quality_score ?? 0.94) * 100).toFixed(1)}%`} />
-        <Field label="CLOUD COVER" value={`${((result.cloud_fraction ?? 0.03) * 100).toFixed(1)}%`} />
-        <Field label="ACQUISITION" value={result.acquisition_date?.slice(0, 10) ?? "2026-05-18"} />
+        <Field label="DATA QUALITY" value={result.quality_score == null ? "N/A" : `${(result.quality_score * 100).toFixed(1)}%`} />
+        <Field label="CLOUD COVER" value={result.cloud_fraction == null ? "N/A" : `${(result.cloud_fraction * 100).toFixed(1)}%`} />
+        <Field label="ACQUISITION" value={result.acquisition_date?.slice(0, 10) ?? "N/A"} />
         <Field label="RESOLUTION" value="10.0 M" />
         <Field label="COMPOSITE RANK" value={result.final_score.toFixed(3)} highlight />
       </div>
@@ -238,17 +271,35 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
         >
           {loading ? "ANALYZING BITEMPORAL SPECTRAL DELTAS..." : "EXECUTE BITEMPORAL ANALYSIS"}
         </button>
+
+        {/* Discover Similar Sites */}
+        {onFindSimilar && (
+          <button
+            onClick={() => onFindSimilar(result)}
+            className="w-full py-2 rounded border border-cyan-700/60 bg-cyan-950/20 hover:bg-cyan-950/50 text-cyan-400 font-sans font-semibold text-xs uppercase tracking-widest transition-all"
+          >
+            🔍 Discover Similar Sites
+          </button>
+        )}
       </div>
 
+      {change?.status !== "ok" && (
+        <div className="border border-amber-800/60 bg-amber-950/20 p-3 text-[11px] text-amber-300 font-mono">
+          {change?.status === "error" ? "ANALYSIS ERROR: " : "ANALYSIS NOT RUN: "}
+          {change?.message ?? "Run the analysis to load real before/after observations for this target."}
+        </div>
+      )}
+
       {/* Interactive Before / After Split Slider */}
-      <BeforeAfterSlider
-        beforeImg={change?.before?.thumbnail_path ?? result.thumbnail_path}
-        afterImg={change?.after?.thumbnail_path ?? result.thumbnail_path}
+      {changeReady && <BeforeAfterSlider
+        beforeImg={change?.before?.thumbnail_url ?? change?.before?.thumbnail_path ?? result.thumbnail_path}
+        afterImg={change?.after?.thumbnail_url ?? change?.after?.thumbnail_path ?? result.thumbnail_path}
         maskImg={change?.change_mask_url}
-        beforeDate={dateFrom}
-        afterDate={dateTo}
-        dominantChange={change?.dominant_change_type ?? result.classification_label ?? "CONSTRUCTION"}
-      />
+        beforeDate={change?.before?.acquisition_date?.slice(0, 10) ?? dateFrom}
+        afterDate={change?.after?.acquisition_date?.slice(0, 10) ?? dateTo}
+        dominantChange={change?.dominant_change_type}
+        confidence={change?.confidence}
+      />}
 
       {/* Multi-Spectral Radiometric Layer Toggles */}
       <div className="space-y-1.5">
@@ -299,28 +350,40 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
       <div className="bg-black/60 p-3 rounded border border-neutral-800 space-y-2 font-mono text-[11px]">
         <div className="flex items-center justify-between">
           <span className="text-neutral-400">CLASSIFIED TYPE:</span>
-          <span className="text-emerald-400 font-bold uppercase bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/50">
-            {change?.dominant_change_type?.replace("_", " ") ?? "CONSTRUCTION"}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {change?.dominant_dynamics && (
+              <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase border ${
+                change.dominant_dynamics === "appearance" ? "bg-emerald-950/60 border-emerald-700/60 text-emerald-300" :
+                change.dominant_dynamics === "disappearance" ? "bg-red-950/60 border-red-700/60 text-red-300" :
+                change.dominant_dynamics === "expansion" ? "bg-amber-950/60 border-amber-700/60 text-amber-300" :
+                "bg-cyan-950/60 border-cyan-700/60 text-cyan-300"
+              }`}>
+                {change.dominant_dynamics}
+              </span>
+            )}
+            <span className="text-emerald-400 font-bold uppercase bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/50">
+              {change?.dominant_change_type?.replace("_", " ") ?? "N/A"}
+            </span>
+          </div>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-neutral-400">AFFECTED GROUND AREA:</span>
           <span className="text-white font-bold">
-            {change?.change_area_hectares
+            {change?.change_area_hectares != null
               ? `${change.change_area_hectares} ha (${(change.change_area_m2 ?? 0).toLocaleString()} m²)`
-              : `${(change?.change_area_m2 ?? 4820).toLocaleString()} m²`}
+              : "N/A"}
           </span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-neutral-400">EARLIEST OBSERVATION:</span>
           <span className="text-cyan-400 font-bold">
-            {change?.earliest_supported_observation?.slice(0, 10) ?? "2025-09-14"}
+            {change?.earliest_supported_observation?.slice(0, 10) ?? "N/A"}
           </span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-neutral-400">CO-REGISTRATION:</span>
           <span className="text-emerald-400">
-            {change?.registration?.is_aligned !== false ? "Aligned (ORB+Warp 0.96)" : "Residual Shift"}
+            {change?.registration ? (change.registration.is_aligned ? "Aligned" : "Residual Shift") : "N/A"}
           </span>
         </div>
       </div>
@@ -334,6 +397,10 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
           <div className="space-y-1.5">
             {change.change_regions.map((region) => {
               const isSelected = region.region_id === selectedRegionId;
+              const dynColor = region.dynamics === "appearance" ? "text-emerald-300 border-emerald-700/50 bg-emerald-950/50" :
+                region.dynamics === "disappearance" ? "text-red-300 border-red-700/50 bg-red-950/50" :
+                region.dynamics === "expansion" ? "text-amber-300 border-amber-700/50 bg-amber-950/50" :
+                "text-cyan-300 border-cyan-700/50 bg-cyan-950/50";
               return (
                 <div
                   key={region.region_id}
@@ -348,7 +415,14 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                     <span className="font-bold text-neutral-200 uppercase">
                       REGION #{region.region_id.toString().padStart(2, "0")} &mdash; {region.change_type}
                     </span>
-                    <span className="text-emerald-400 font-bold">{region.area_m2} m²</span>
+                    <div className="flex items-center gap-1.5">
+                      {region.dynamics && (
+                        <span className={`text-[8px] px-1.5 py-0.5 rounded border font-bold uppercase ${dynColor}`}>
+                          {region.dynamics}
+                        </span>
+                      )}
+                      <span className="text-emerald-400 font-bold">{region.area_m2} m²</span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-3 mt-1 text-[9px] font-mono text-neutral-500">
                     <span>Conf: <strong className="text-cyan-400">{Math.round(region.confidence * 100)}%</strong></span>
@@ -365,19 +439,23 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
         </div>
       )}
 
-      {/* Multi-temporal Change Timeline */}
+      {/* Multi-temporal Change Timeline (Tier 1.3) */}
       <ChangeTimeline
-        earliestDate={change?.earliest_supported_observation?.slice(0, 10) ?? "2024-09-14"}
-        registrationConfidence={96}
+        earliestDate={change?.earliest_supported_observation?.slice(0, 10) ?? undefined}
+        registrationConfidence={change?.registration?.correlation_after != null ? Math.round(change.registration.correlation_after * 100) : 0}
+        observations={change?.observations}
       />
 
-      {/* Explainable AI Evidence Panel */}
+      {/* Explainable AI Evidence Panel (Tier 1.4 & 1.5) */}
       <EvidencePanel
+        confidence={change?.confidence}
         reasons={change?.reasons}
         suppressionReasons={change?.suppression_reasons}
-        registrationCorr={change?.registration?.correlation_after ?? 0.94}
-        dNdvi={selectedRegion?.mean_d_ndvi ?? -0.38}
-        dNdbi={selectedRegion?.mean_d_ndbi ?? 0.42}
+        registrationCorr={change?.registration?.correlation_after}
+        dNdvi={selectedRegion?.mean_d_ndvi}
+        dNdbi={selectedRegion?.mean_d_ndbi}
+        evidence={change?.evidence}
+        confounds={change?.confounds}
       />
 
       {/* Analyst Decision Action Bar */}

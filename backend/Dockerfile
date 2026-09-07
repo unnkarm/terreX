@@ -10,6 +10,9 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+ARG INSTALL_ML=false
+COPY requirements-ml.txt .
+RUN if [ "$INSTALL_ML" = "true" ]; then pip install --no-cache-dir -r requirements-ml.txt; fi
 
 COPY . .
 

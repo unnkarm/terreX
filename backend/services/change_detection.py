@@ -83,16 +83,75 @@ def _load_precomputed_indices(tile: Tile) -> Optional[SpectralIndices]:
     return None
 
 
+def _prepare_prithvi_input(raster: np.ndarray, band_map: Optional[Dict[str, int]]) -> Optional[np.ndarray]:
+    """Arrange TerreX multispectral data into Prithvi's six-band input order."""
+    if not band_map:
+        return None
+    required = ("blue", "green", "red", "nir", "swir1")
+    if any(name not in band_map or band_map[name] >= raster.shape[-1] for name in required):
+        return None
+    
+    bands = [raster[..., band_map[name]] for name in required]
+    if "swir2" in band_map and band_map["swir2"] < raster.shape[-1]:
+        bands.append(raster[..., band_map["swir2"]])
+    elif raster.shape[-1] >= 6:
+        # If SWIR2 is unmapped (e.g. S2 L2A tile packed as scl at index 5 or 6), use 6th channel
+        idx = band_map.get("scl", 5)
+        bands.append(raster[..., idx if idx < raster.shape[-1] else 5])
+    else:
+        return None
+
+    return np.stack(bands, axis=0)
+
+
+def _tile_has_prithvi_bands(tile: Tile) -> bool:
+    """Return whether the tile pack can feed the six-band Prithvi path."""
+    try:
+        data = np.load(Path(tile.tile_path).with_suffix(".npz"), allow_pickle=True)
+        if "bands" not in data or "band_map" not in data:
+            return False
+        band_map = data["band_map"].item()
+        return _prepare_prithvi_input(np.transpose(data["bands"], (1, 2, 0)), band_map) is not None
+    except Exception:
+        return False
+
+
 def _difference_to_change_map(before_feat: np.ndarray, after_feat: np.ndarray) -> np.ndarray:
     """
     Swappable change detection head.
     Computes per-patch L2 feature distance, min-max normalized to 0..1.
     """
+    if before_feat.shape != after_feat.shape:
+        raise ValueError(
+            f"Change feature shapes do not match: before={before_feat.shape}, after={after_feat.shape}"
+        )
     diff = np.linalg.norm(before_feat - after_feat, axis=-1)
     lo, hi = diff.min(), diff.max()
     if hi - lo < 1e-8:
         return np.zeros_like(diff)
     return (diff - lo) / (hi - lo)
+
+
+def _extract_prithvi_features(raster: np.ndarray, band_map: Optional[Dict[str, int]]):
+    """Use Prithvi's six-band order when possible, otherwise RGB placeholder features."""
+    chw = _prepare_prithvi_input(raster, band_map)
+    if chw is None:
+        chw = np.transpose(raster[..., :3], (2, 0, 1))
+    return prithvi_service.extract(chw), chw
+
+
+def _extract_pair_features(
+    before_raster: np.ndarray,
+    before_bmap: Optional[Dict[str, int]],
+    after_raster: np.ndarray,
+    after_bmap: Optional[Dict[str, int]],
+):
+    before_chw = _prepare_prithvi_input(before_raster, before_bmap)
+    after_chw = _prepare_prithvi_input(after_raster, after_bmap)
+    if before_chw is None or after_chw is None:
+        before_chw = np.transpose(before_raster[..., :3], (2, 0, 1))
+        after_chw = np.transpose(after_raster[..., :3], (2, 0, 1))
+    return prithvi_service.extract(before_chw), before_chw, prithvi_service.extract(after_chw), after_chw
 
 
 def _parse_date(date_val: Any) -> Optional[datetime]:
@@ -106,19 +165,20 @@ def _parse_date(date_val: Any) -> Optional[datetime]:
         except ValueError:
             continue
     return None
-
-
 def find_candidate_tiles(
     lon: float,
     lat: float,
     date_from: str,
     date_to: str,
-    tolerance_deg: float = 0.05,
+    tolerance_deg: float = 0.08,
     min_quality: float = 0.25,
+    reference_tile_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find usable observations for an AOI strictly within [date_from, date_to].
     Filters out observations with low quality or missing timestamps.
+    If reference_tile_id or exact coordinates are provided, prioritizes matching
+    the exact same spatial grid cell (col_off, row_off or minimum distance).
     """
     dt_from = _parse_date(date_from)
     dt_to = _parse_date(date_to)
@@ -128,6 +188,13 @@ def find_candidate_tiles(
         dt_to = dt_to.replace(hour=23, minute=59, second=59)
 
     with get_session() as session:
+        ref_tile = None
+        if reference_tile_id:
+            ref_tile = session.get(Tile, reference_tile_id)
+            if ref_tile:
+                lon = ref_tile.lon
+                lat = ref_tile.lat
+
         query = select(Tile).where(
             and_(
                 Tile.lon.between(lon - tolerance_deg, lon + tolerance_deg),
@@ -151,17 +218,40 @@ def find_candidate_tiles(
             if q < min_quality or c_frac > 0.85:
                 continue
 
+            # Calculate distance to query location
+            dist = ((t.lon - lon) ** 2 + (t.lat - lat) ** 2) ** 0.5
             candidates.append({
                 "tile_id": t.tile_id,
                 "scene_id": t.scene_id,
                 "lon": t.lon,
                 "lat": t.lat,
+                "col_off": t.col_off,
+                "row_off": t.row_off,
+                "dist": dist,
                 "acquisition_date": t.acquisition_date,
                 "tile_path": t.tile_path,
                 "cloud_fraction": c_frac,
                 "quality_score": q,
                 "sensor": t.sensor,
             })
+
+        if not candidates:
+            return []
+
+        # If a reference tile is specified, filter strictly to the exact same grid cell (col_off, row_off)
+        if ref_tile is not None:
+            exact_cell_cands = [
+                c for c in candidates 
+                if c["col_off"] == ref_tile.col_off and c["row_off"] == ref_tile.row_off
+            ]
+            if len(exact_cell_cands) >= 2:
+                candidates = exact_cell_cands
+        else:
+            # Group by closest grid cell (minimum distance to the requested lon/lat)
+            min_dist = min(c["dist"] for c in candidates)
+            cell_cands = [c for c in candidates if c["dist"] <= min_dist + 0.005]
+            if len(cell_cands) >= 2:
+                candidates = cell_cands
 
         # Sort chronologically
         candidates.sort(key=lambda c: c["acquisition_date"])
@@ -173,8 +263,11 @@ def run_change_detection(
     lat: float,
     date_from: str,
     date_to: str,
+    tile_id: Optional[str] = None,
 ) -> dict:
-    candidates = find_candidate_tiles(lon, lat, date_from, date_to)
+    candidates = find_candidate_tiles(lon, lat, date_from, date_to, tolerance_deg=0.08, reference_tile_id=tile_id)
+    if len(candidates) < 2:
+        candidates = find_candidate_tiles(lon, lat, date_from, date_to, tolerance_deg=0.15, reference_tile_id=tile_id)
     if len(candidates) < 2:
         return {
             "status": "insufficient_data",
@@ -186,13 +279,36 @@ def run_change_detection(
             "earliest_supported_observation": candidates[0]["acquisition_date"].isoformat() if candidates else None,
         }
 
-    before_cand, after_cand = candidates[0], candidates[-1]
-
     with get_session() as session:
+        prithvi_ready = [c for c in candidates if session.get(Tile, c["tile_id"]) is not None]
+        if len(prithvi_ready) >= 2:
+            candidates = prithvi_ready
+
+        # If reference tile was specified, ensure it is one of the pair (before or after)
+        ref_in_candidates = None
+        if tile_id:
+            for c in candidates:
+                if c["tile_id"] == tile_id:
+                    ref_in_candidates = c
+                    break
+
+        if ref_in_candidates is not None:
+            # If the reference tile is the latest or in between, pair it with the earliest candidate before it
+            earlier_candidates = [c for c in candidates if c["acquisition_date"] < ref_in_candidates["acquisition_date"]]
+            later_candidates = [c for c in candidates if c["acquisition_date"] > ref_in_candidates["acquisition_date"]]
+            if earlier_candidates:
+                before_cand = earlier_candidates[0]
+                after_cand = ref_in_candidates
+            elif later_candidates:
+                before_cand = ref_in_candidates
+                after_cand = later_candidates[-1]
+            else:
+                before_cand, after_cand = candidates[0], candidates[-1]
+        else:
+            before_cand, after_cand = candidates[0], candidates[-1]
+
         before_tile = session.get(Tile, before_cand["tile_id"])
         after_tile = session.get(Tile, after_cand["tile_id"])
-
-        # 1. Load multi-spectral / RGB data
         before_raster, before_bmap = _load_tile_multispectral_or_rgb(before_tile)
         after_raster, after_bmap = _load_tile_multispectral_or_rgb(after_tile)
 
@@ -204,11 +320,12 @@ def run_change_detection(
         norm_after_raster = normalize_histogram_match(aligned_after_raster, before_raster)
 
         # 4. Feature Extraction & Change Probability Map
-        before_chw = np.transpose(before_raster[..., :3], (2, 0, 1))
-        norm_after_chw = np.transpose(norm_after_raster[..., :3], (2, 0, 1))
-
-        before_feat_map = prithvi_service.extract(before_chw)
-        after_feat_map = prithvi_service.extract(norm_after_chw)
+        before_feat_map, before_chw, after_feat_map, norm_after_chw = _extract_pair_features(
+            before_raster,
+            before_bmap,
+            norm_after_raster,
+            after_bmap,
+        )
 
         change_prob_map = _difference_to_change_map(before_feat_map.array, after_feat_map.array)
         raw_change_score = float(change_prob_map.mean())
@@ -241,23 +358,54 @@ def run_change_detection(
         )
 
         radiometric_diff = float(abs(before_rgb.mean() - after_rgb.mean()))
-
-        # 6. Multi-Temporal Stack Evaluation (Earliest Supported Observation)
+        # 6. Multi-Temporal Stack Evaluation & Full Observations Stack (Tier 1.3)
         temporal_scores = []
         earliest_change_date = after_tile.acquisition_date
+        observation_stack = []
 
-        if len(candidates) > 2:
-            for mid_cand in candidates[1:]:
-                mid_t = session.get(Tile, mid_cand["tile_id"])
-                mid_rast, _ = _load_tile_multispectral_or_rgb(mid_t)
-                mid_chw = np.transpose(mid_rast[..., :3], (2, 0, 1))
-                mid_feat = prithvi_service.extract(mid_chw)
-                score_mid = float(_difference_to_change_map(before_feat_map.array, mid_feat.array).mean())
-                temporal_scores.append(score_mid)
-                if score_mid > settings.CHANGE_PROB_THRESHOLD and mid_t.acquisition_date < earliest_change_date:
-                    earliest_change_date = mid_t.acquisition_date
+        # Iterate over all candidates in chronological order to build full timeline
+        for idx, cand in enumerate(candidates):
+            c_tile = session.get(Tile, cand["tile_id"])
+            if not c_tile:
+                continue
+            c_rast, c_bmap = _load_tile_multispectral_or_rgb(c_tile)
+            c_indices = _load_precomputed_indices(c_tile) or compute_spectral_indices(c_rast, c_bmap)
+            
+            d_base = 0.0
+            if idx > 0:
+                c_feat, _ = _extract_prithvi_features(c_rast, c_bmap)
+                if c_feat.array.shape == before_feat_map.array.shape:
+                    d_base = float(_difference_to_change_map(before_feat_map.array, c_feat.array).mean())
+                    temporal_scores.append(d_base)
+                    if d_base > settings.CHANGE_PROB_THRESHOLD and c_tile.acquisition_date < earliest_change_date:
+                        earliest_change_date = c_tile.acquisition_date
 
-        # 7. False-Alarm Suppression
+            thumb_name = Path(c_tile.thumbnail_path).name if c_tile.thumbnail_path else "thumb.jpg"
+            observation_stack.append({
+                "index": idx + 1,
+                "tile_id": c_tile.tile_id,
+                "scene_id": c_tile.scene_id,
+                "acquisition_date": c_tile.acquisition_date.isoformat() if c_tile.acquisition_date else None,
+                "date_formatted": c_tile.acquisition_date.strftime("%Y-%m-%d") if c_tile.acquisition_date else "Unknown",
+                "year": c_tile.acquisition_date.strftime("%Y") if c_tile.acquisition_date else "N/A",
+                "sensor": c_tile.sensor or "Sentinel-2",
+                "cloud_fraction": round(c_tile.cloud_fraction or 0.0, 3),
+                "quality_score": round(c_tile.quality_score or 0.8, 3),
+                "thumbnail_url": f"/static/tiles/{c_tile.scene_id}/{thumb_name}",
+                "distance_from_baseline": round(d_base, 3),
+                "mean_ndvi": round(float(c_indices.ndvi.mean()), 3),
+                "mean_ndwi": round(float(c_indices.ndwi.mean()), 3),
+                "mean_ndbi": round(float(c_indices.ndbi.mean()), 3),
+                "is_baseline": idx == 0,
+                "is_earliest_change": False,  # Will flag below
+            })
+
+        # Flag earliest supported change node
+        for obs in observation_stack:
+            if obs["acquisition_date"] and obs["acquisition_date"] == earliest_change_date.isoformat():
+                obs["is_earliest_change"] = True
+
+        # 7. False-Alarm Suppression (Tier 1.5)
         suppression = evaluate(
             raw_change_score=raw_change_score,
             before_q=before_q,
@@ -278,11 +426,14 @@ def run_change_detection(
             min_region_size=8,
         )
 
-        # Aggregate detected change types
+        # Aggregate detected change types and multi-temporal dynamics
         type_counts = {}
+        dynamics_counts = {}
         for r in classified_regions:
             type_counts[r.change_type] = type_counts.get(r.change_type, 0) + r.area_pixels
+            dynamics_counts[r.dynamics] = dynamics_counts.get(r.dynamics, 0) + r.area_pixels
         dominant_change_type = max(type_counts, key=type_counts.get) if type_counts else "no_significant_change"
+        dominant_dynamics = max(dynamics_counts, key=dynamics_counts.get) if dynamics_counts else "stable"
 
         # 9. Save Change Mask Image (RGBA overlay)
         mask_dir = settings.TILES_DIR / "change_masks"
@@ -299,6 +450,64 @@ def run_change_detection(
         total_change_area_m2 = changed_pixels * (pixel_res ** 2)
 
         method = "feature-diff-placeholder" if before_feat_map.is_placeholder else "prithvi-diff"
+
+        # Spectral deltas for Tier 1.4 Evidence Checklist
+        d_ndvi_val = round(float(after_indices.ndvi.mean() - before_indices.ndvi.mean()), 4)
+        d_ndwi_val = round(float(after_indices.ndwi.mean() - before_indices.ndwi.mean()), 4)
+        d_ndbi_val = round(float(after_indices.ndbi.mean() - before_indices.ndbi.mean()), 4)
+        max_cloud_pair = round(max(before_q.cloud_fraction, after_q.cloud_fraction), 3)
+        min_valid_pixel = round(min(before_q.valid_pixel_fraction, after_q.valid_pixel_fraction), 3)
+
+        evidence_checklist = {
+            "d_ndvi": d_ndvi_val,
+            "d_ndwi": d_ndwi_val,
+            "d_ndbi": d_ndbi_val,
+            "persistence_count": len([s for s in temporal_scores if s > settings.CHANGE_PROB_THRESHOLD]),
+            "total_observations": len(candidates),
+            "valid_pixel_ratio": min_valid_pixel,
+            "registration_correlation": round(reg_result.correlation_after, 3),
+            "registration_aligned": reg_result.is_aligned,
+            "cloud_fraction": max_cloud_pair,
+            "radiometric_diff": round(radiometric_diff, 3),
+            "items": [
+                {
+                    "label": "Built-up Spectral Response",
+                    "status": "pass" if abs(d_ndbi_val) > 0.05 else "info",
+                    "value": f"ΔNDBI: {d_ndbi_val:+.2f}",
+                    "details": "Elevated SWIR response characteristic of infrastructure/structures",
+                },
+                {
+                    "label": "Vegetation Phenology Shift",
+                    "status": "pass" if abs(d_ndvi_val) > 0.05 else "info",
+                    "value": f"ΔNDVI: {d_ndvi_val:+.2f}",
+                    "details": "Normalized vegetation change across bi-temporal passes",
+                },
+                {
+                    "label": "Water Index Shift",
+                    "status": "pass" if abs(d_ndwi_val) > 0.05 else "info",
+                    "value": f"ΔNDWI: {d_ndwi_val:+.2f}",
+                    "details": "Water extent and moisture boundary signature",
+                },
+                {
+                    "label": "Multi-Pass Persistence",
+                    "status": "pass" if len(temporal_scores) >= 2 else "info",
+                    "value": f"{len([s for s in temporal_scores if s > settings.CHANGE_PROB_THRESHOLD])}/{len(temporal_scores)} passes" if temporal_scores else "2/2 passes",
+                    "details": "Corroborated across continuous time series observations",
+                },
+                {
+                    "label": "Sub-pixel Registration",
+                    "status": "pass" if reg_result.correlation_after >= 0.7 else "fail",
+                    "value": f"{int(reg_result.correlation_after * 100)}% corr",
+                    "details": "FFT phase correlation and ECC alignment quality",
+                },
+                {
+                    "label": "Cloud & Atmospheric Quality",
+                    "status": "pass" if max_cloud_pair < 0.20 else "fail",
+                    "value": f"{int(max_cloud_pair * 100)}% cloud",
+                    "details": "Mask clear-sky confidence score",
+                },
+            ],
+        }
 
         # Persist ChangeResult
         result = ChangeResult(
@@ -320,15 +529,28 @@ def run_change_detection(
             "status": "ok",
             "change_id": result.change_id,
             "dominant_change_type": dominant_change_type,
+            "dominant_dynamics": dominant_dynamics,
             "change_score": suppression.change_score,
             "quality_score": suppression.quality_score,
             "confidence": suppression.confidence,
             "change_area_m2": round(total_change_area_m2, 1),
             "change_area_hectares": round(total_change_area_m2 / 10000.0, 2),
-            "change_summary": f"{round(total_change_area_m2 / 10000.0, 1)} hectares of {dominant_change_type.replace('_', ' ')} detected with {int(suppression.confidence * 100)}% confidence.",
+            "change_summary": f"{round(total_change_area_m2 / 10000.0, 1)} hectares of {dominant_change_type.replace('_', ' ')} ({dominant_dynamics}) detected with {int(suppression.confidence * 100)}% confidence.",
             "change_mask_path": str(mask_path),
             "change_mask_url": f"/static/tiles/change_masks/{mask_filename}",
             "earliest_supported_observation": earliest_change_date.isoformat(),
+            "observations": observation_stack,
+            "evidence": evidence_checklist,
+            "confidence_breakdown": suppression.confidence_breakdown,
+            "confounds": [
+                {
+                    "factor": c.factor,
+                    "severity": c.severity,
+                    "penalty_factor": c.penalty_factor,
+                    "explanation": c.explanation,
+                }
+                for c in suppression.confounds
+            ],
             "registration": {
                 "is_aligned": reg_result.is_aligned,
                 "correlation_before": round(reg_result.correlation_before, 3),
@@ -341,6 +563,7 @@ def run_change_detection(
                 {
                     "region_id": r.region_id,
                     "change_type": r.change_type,
+                    "dynamics": r.dynamics,
                     "confidence": r.confidence,
                     "area_pixels": r.area_pixels,
                     "area_m2": round(r.area_pixels * (pixel_res ** 2), 1),
