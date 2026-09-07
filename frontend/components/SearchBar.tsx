@@ -168,6 +168,8 @@ export default function SearchBar({
 
       {/* Image Search Mode */}
       {currentMode === "image" && (
+        <div
+          onClick={() => fileInputRef.current?.click()}
           className="border-2 border-dashed border-neutral-800 hover:border-emerald-500/60 rounded p-6 text-center cursor-pointer transition-colors bg-black/40 group"
         >
           <svg className="w-8 h-8 text-neutral-600 group-hover:text-emerald-400 mx-auto mb-2 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">

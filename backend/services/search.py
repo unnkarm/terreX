@@ -7,8 +7,9 @@ PostGIS metadata join/filter -> hybrid ranking.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any, Dict
 
 from PIL import Image
 from sqlalchemy import select
@@ -22,6 +23,16 @@ from services.vector_store import vector_store
 from services.ranking import compute_final_score
 from services.nlp_filter import parse_natural_language_query, compute_distance_km, ParsedQueryFilters
 from shapely.geometry import Point, Polygon, shape
+
+KNOWN_GAZETTEER: Dict[str, Dict[str, Any]] = {
+    "kolkata": {"name": "Kolkata (Hooghly Basin)", "lon": 88.3639, "lat": 22.5726},
+    "delhi": {"name": "Delhi NCR (Yamuna Basin)", "lon": 77.2090, "lat": 28.6139},
+    "hooghly": {"name": "Hooghly River Basin", "lon": 88.35, "lat": 22.58},
+    "yamuna": {"name": "Yamuna River Basin", "lon": 77.25, "lat": 28.65},
+    "new town": {"name": "New Town Rajarhat", "lon": 88.46, "lat": 22.58},
+    "rajarhat": {"name": "Rajarhat Action Area", "lon": 88.47, "lat": 22.59},
+    "biswa bangla": {"name": "Biswa Bangla Gate", "lon": 88.468, "lat": 22.585},
+}
 
 
 def _parse_polygon_geometry(poly_input: Any) -> Optional[Polygon]:
@@ -61,18 +72,26 @@ def _hits_to_results(
     tile_ids = [t for t in tile_ids if t]
     if not tile_ids:
         return results
-    tiles = {t.tile_id: t for t in session.execute(
-        select(Tile).options(defer(Tile.geometry)).where(Tile.tile_id.in_(tile_ids))
+    tile_id_objs = []
+    for tid in tile_ids:
+        tile_id_objs.append(tid)
+        try:
+            tile_id_objs.append(uuid.UUID(str(tid)))
+        except Exception:
+            pass
+
+    tiles = {str(t.tile_id): t for t in session.execute(
+        select(Tile).options(defer(Tile.geometry)).where(Tile.tile_id.in_(tile_id_objs))
     ).scalars()}
 
     feedback_rows = session.execute(
-        select(Feedback).where(Feedback.target_id.in_(tile_ids))
+        select(Feedback).where(Feedback.target_id.in_(tile_id_objs))
     ).scalars().all()
-    confirms = Counter(row.target_id for row in feedback_rows if row.verdict == "confirm")
-    rejects = Counter(row.target_id for row in feedback_rows if row.verdict == "reject")
+    confirms = Counter(str(row.target_id) for row in feedback_rows if row.verdict == "confirm")
+    rejects = Counter(str(row.target_id) for row in feedback_rows if row.verdict == "reject")
 
     for h in hits:
-        tile_id_str = (h.payload or {}).get("tile_id")
+        tile_id_str = str((h.payload or {}).get("tile_id"))
         tile = tiles.get(tile_id_str)
         if tile is None:
             continue
@@ -122,8 +141,8 @@ def _hits_to_results(
         breakdown["geo"] = round(geo_relevance, 3)
 
         results.append({
-            "tile_id": tile.tile_id,
-            "scene_id": tile.scene_id,
+            "tile_id": str(tile.tile_id),
+            "scene_id": str(tile.scene_id),
             "lon": tile.lon,
             "lat": tile.lat,
             "similarity_score": breakdown.get("semantic", semantic_score),
