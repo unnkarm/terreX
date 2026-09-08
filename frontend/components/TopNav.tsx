@@ -25,9 +25,7 @@ export default function TopNav({ status, onExportClick }: TopNavProps) {
       <div className="flex items-center gap-6">
         <Link href="/" className="flex items-center gap-3 group">
           <Logo size={28} showText={true} />
-          <span className="hidden lg:inline-block text-[9px] tracking-[0.2em] text-neutral-500 uppercase font-sans font-medium border-l border-neutral-800 pl-3 py-0.5">
-            ISRO GEOSPATIAL INTELLIGENCE PORTAL
-          </span>
+          
         </Link>
 
         {/* Focused MVP Nav Tabs */}

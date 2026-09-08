@@ -174,6 +174,12 @@ export default function WorkspacePage() {
     return [88.2619, 22.5905]; // Kolkata New Town default
   }, [customCenter, results]);
 
+  const currentSelectedLoc = useMemo(() => {
+    return INDIAN_LOCATIONS.find(
+      (loc) => Math.abs(center[0] - loc.coords[0]) < 0.08 && Math.abs(center[1] - loc.coords[1]) < 0.08
+    );
+  }, [INDIAN_LOCATIONS, center]);
+
   return (
     <main className="h-screen w-screen flex flex-col bg-black font-sans relative overflow-hidden select-none">
       {/* Top Navigation Bar */}
@@ -220,27 +226,38 @@ export default function WorkspacePage() {
       </div>
 
       {/* Indian AOI Location Fast Selector */}
-      <div className="w-full bg-black/95 border-b border-neutral-800/80 px-6 py-1.5 flex items-center justify-between gap-2 overflow-x-auto text-[10px] font-mono z-40">
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-neutral-500 uppercase tracking-wider font-bold flex items-center gap-1">
+      <div className="w-full bg-black/95 border-b border-neutral-800/80 px-6 py-1.5 flex items-center justify-between gap-3 text-[10px] font-mono z-40">
+        <div className="flex items-center gap-2.5 flex-shrink-0">
+          <label htmlFor="target-aoi-select" className="text-neutral-400 uppercase tracking-wider font-bold flex items-center gap-1.5 cursor-pointer">
             <span className="text-amber-500">🇮🇳</span> TARGET AOI:
-          </span>
-          {INDIAN_LOCATIONS.map((loc) => {
-            const isCurrent = Math.abs(center[0] - loc.coords[0]) < 0.05 && Math.abs(center[1] - loc.coords[1]) < 0.05;
-            return (
-              <button
-                key={loc.id}
-                onClick={() => handleSelectIndianLocation(loc)}
-                className={`px-2.5 py-1 rounded transition-all tracking-wider uppercase font-semibold ${
-                  isCurrent
-                    ? "bg-amber-500/20 border border-amber-500/80 text-amber-300 shadow-sm"
-                    : "bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700"
-                }`}
-              >
-                {loc.name}
-              </button>
-            );
-          })}
+          </label>
+          <div className="relative inline-flex items-center">
+            <select
+              id="target-aoi-select"
+              value={currentSelectedLoc?.id ?? ""}
+              onChange={(e) => {
+                const loc = INDIAN_LOCATIONS.find((l) => l.id === e.target.value);
+                if (loc) {
+                  handleSelectIndianLocation(loc);
+                }
+              }}
+              className="bg-neutral-900 border border-neutral-700 hover:border-amber-500/80 focus:border-amber-500 text-amber-300 font-semibold px-3 py-1 pr-8 rounded text-[10px] uppercase tracking-wider cursor-pointer outline-none appearance-none transition-all shadow-sm"
+            >
+              <option value="" disabled className="bg-neutral-950 text-neutral-500">
+                SELECT TARGET AOI
+              </option>
+              {INDIAN_LOCATIONS.map((loc) => (
+                <option key={loc.id} value={loc.id} className="bg-neutral-950 text-neutral-200 py-1 font-mono">
+                  {loc.name}
+                </option>
+              ))}
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-amber-400">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </div>
         </div>
         <div className="hidden lg:flex items-center gap-2 text-neutral-500 text-[9px]">
           <span>INDIAN EO INTEGRATION: BHUVAN LISS-III &middot; MOSDAC API &middot; SENTINEL-2 L2A</span>
@@ -249,7 +266,7 @@ export default function WorkspacePage() {
 
       {/* 3-Column Operational Workspace Layout */}
       <div className="flex-1 min-h-0 flex relative overflow-hidden">
-        
+
         {/* LEFT COLUMN: Search & Filters & Ranked Results (390px) */}
         <div
           className={`flex-shrink-0 h-full border-r border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 overflow-hidden transition-[width,transform] duration-300 ${
