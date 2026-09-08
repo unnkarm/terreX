@@ -583,7 +583,7 @@ export function getDemoChangeResponse(lon: number, lat: number, dateFrom: string
     status: "ok",
     is_fallback: true,
     result_source: "demo-fallback",
-    fallback_reason: fallbackReason,
+    fallback_reason: "Live change detection was unavailable.",
     dominant_change_type: "construction",
     change_id: "chg-" + Math.floor(lon * 100) + "-" + Math.floor(lat * 100),
     before: {

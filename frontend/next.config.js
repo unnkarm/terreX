@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   images: { unoptimized: true },
-  turbopack: { root: __dirname },
+
   async rewrites() {
     const backendUrl = process.env.API_INTERNAL_URL || "http://localhost:8000";
     return [

@@ -46,7 +46,7 @@ def chat_endpoint(payload: ChatRequest):
     
     return ChatResponse(
         response=result.get("response"),
-        citations=[Citation(**c) for c in result.get("citations", [])],
+        citations=[Citation(**dict(c, id=str(c.get("id")))) for c in result.get("citations", [])],
         available=bool(result.get("available")),
         fallback=bool(result.get("fallback")),
         latency_ms=result.get("latency_ms"),

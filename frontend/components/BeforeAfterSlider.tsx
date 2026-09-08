@@ -24,6 +24,7 @@ export default function BeforeAfterSlider({
   afterDate = null,
   dominantChange = null,
   confidence = null,
+  isFallback = false,
 }: BeforeAfterSliderProps) {
   const [sliderPos, setSliderPos] = useState(50); // percentage 0 - 100
   const [mode, setMode] = useState<ViewMode>("SPLIT");

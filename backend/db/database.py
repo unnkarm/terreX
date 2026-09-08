@@ -91,6 +91,7 @@ def _ensure_ingestion_schema(engine):
             "quality_mask_path": "VARCHAR", "clear_fraction": "FLOAT", "quality_mask_summary": "JSON",
             "radiometric_stats": "JSON", "spectral_indices": "JSON", "provenance": "JSON",
             "embedding_model_version": "VARCHAR",
+            "embedding": "JSON", "embedding_model": "VARCHAR", "embedding_is_placeholder": "BOOLEAN DEFAULT FALSE",
         },
     }
     inspector = inspect(engine)
