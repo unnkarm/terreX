@@ -254,8 +254,8 @@ class PrithviService:
                 logger.warning("Prithvi checkpoint found but failed to load (%s). Using placeholder.", exc)
         else:
             logger.warning(
-                "No Prithvi-EO checkpoint staged in %s. Using PLACEHOLDER "
-                "statistical feature extractor for change detection — see "
+                "No Prithvi-EO ONNX model found in %s. Expected 'prithvi_int8.onnx'. "
+                "Using PLACEHOLDER statistical feature extractor for change detection — see "
                 "README for staging instructions.", settings.PRITHVI_DIR
             )
         self._placeholder = _PlaceholderFeatureExtractor()

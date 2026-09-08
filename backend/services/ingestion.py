@@ -26,7 +26,8 @@ from rasterio.windows import Window
 from rasterio.warp import transform_bounds, transform
 from PIL import Image
 from shapely.geometry import box
-from sqlalchemy.orm import defer
+from geoalchemy2.shape import from_shape
+from sqlalchemy import select
 
 from config import settings
 from db.database import get_session
@@ -222,6 +223,41 @@ def _validate_cog_artifact(path: Path) -> Dict[str, Any]:
         return {"is_tiled": False, "overview_levels": [], "cog_ready": False, "error": str(exc)}
 
 
+def _reindex_existing_scene(scene_id: str) -> int:
+    """Rebuild Qdrant points from persisted tile images after an index reset."""
+    reindexed = 0
+    with get_session() as session:
+        tiles = session.execute(select(Tile).where(Tile.scene_id == scene_id)).scalars().all()
+        for tile in tiles:
+            if not tile.tile_path or not Path(tile.tile_path).exists():
+                logger.warning("Cannot reindex tile %s: missing tile image %s", tile.tile_id, tile.tile_path)
+                continue
+            try:
+                with Image.open(tile.tile_path) as image:
+                    emb = embedding_service.embed_image(image.convert("RGB"))
+                tile.embedding_model = emb.model_name
+                tile.embedding_is_placeholder = bool(emb.is_placeholder)
+                tile.embedding_model_version = emb.model_version
+                vector_store.upsert_tile(
+                    tile_id=tile.tile_id,
+                    vector=emb.vector,
+                    payload={
+                        "scene_id": str(tile.scene_id),
+                        "lon": float(tile.lon), "lat": float(tile.lat), "sensor": tile.sensor,
+                        "acquisition_date": tile.acquisition_date.isoformat() if tile.acquisition_date else None,
+                        "quality_score": float(tile.quality_score or 0.0),
+                        "cloud_fraction": float(tile.cloud_fraction or 0.0),
+                        "thumbnail_path": tile.thumbnail_path,
+                        "embedding_is_placeholder": bool(emb.is_placeholder),
+                        "embedding_model_version": emb.model_version,
+                    },
+                )
+                reindexed += 1
+            except Exception as exc:
+                logger.exception("Failed to reindex tile %s: %s", tile.tile_id, exc)
+    return reindexed
+
+
 def _read_tile_rgb_float(
     dataset: rasterio.DatasetReader,
     window: Window,
@@ -280,6 +316,16 @@ def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
         existing_scene = existing_session.query(Scene).options(defer(Scene.footprint)).filter(Scene.source_hash == source_hash).first()
         if existing_scene and existing_scene.status == "ingested":
             tile_count = len(existing_scene.tiles)
+            missing_tiles = [tile.tile_id for tile in existing_scene.tiles if not vector_store.has_tile(tile.tile_id)]
+            if missing_tiles:
+                reindexed_tiles = _reindex_existing_scene(existing_scene.scene_id)
+                logger.info("Repaired vector index for scene %s: %d/%d tile(s) reindexed", existing_scene.scene_id, reindexed_tiles, len(missing_tiles))
+                return {
+                    "scene_id": existing_scene.scene_id, "tiles": tile_count, "created_tiles": 0,
+                    "reindexed_tiles": reindexed_tiles, "skipped_tiles": max(tile_count - reindexed_tiles, 0),
+                    "discarded_tiles": 0, "status": "reindexed", "source_hash": source_hash,
+                    "index_size": vector_store.count(), "elapsed_seconds": round(time.perf_counter() - started, 3),
+                }
             logger.info("Skipping already indexed scene %s (%d tiles)", path.name, tile_count)
             return {"scene_id": existing_scene.scene_id, "tiles": tile_count, "created_tiles": 0, "skipped_tiles": tile_count, "discarded_tiles": 0, "status": "skipped", "source_hash": source_hash, "elapsed_seconds": round(time.perf_counter() - started, 3)}
     with rasterio.open(path) as dataset:

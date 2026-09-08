@@ -59,15 +59,27 @@ export default function TopNav({ status, onExportClick }: TopNavProps) {
 
         {/* Model Status Pills */}
         <div className="hidden md:flex items-center gap-2 font-mono">
-          <span className="px-2 py-0.5 rounded border border-emerald-900/40 text-emerald-400 bg-emerald-950/20 text-[10px]">
-            RemoteCLIP ✓
+          <span className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
+            status?.models?.remoteclip?.staged
+              ? "border-emerald-900/40 text-emerald-400 bg-emerald-950/20"
+              : "border-neutral-800 text-neutral-500 bg-neutral-950"
+          }`}>
+            RemoteCLIP {status?.models?.remoteclip?.staged ? "✓" : "✗"}
           </span>
-          <span className="px-2 py-0.5 rounded border border-emerald-900/40 text-emerald-400 bg-emerald-950/20 text-[10px]">
-            Prithvi-EO ✓
+          <span className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
+            status?.models?.prithvi?.staged
+              ? "border-emerald-900/40 text-emerald-400 bg-emerald-950/20"
+              : "border-neutral-800 text-neutral-500 bg-neutral-950"
+          }`}>
+            Prithvi-EO {status?.models?.prithvi?.staged ? "✓" : "✗"}
           </span>
-          <span className="flex items-center gap-1.5 text-cyan-400 font-bold ml-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_#06b6d4] animate-pulse" />
-            {status?.offline_mode !== false ? "OFFLINE GRID" : "SECURE LOCAL"}
+          <span className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] transition-colors ml-1 ${
+            status?.offline_mode !== false
+              ? "border-cyan-900/40 text-cyan-400 bg-cyan-950/20"
+              : "border-neutral-800 text-neutral-500 bg-neutral-950"
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${status?.offline_mode !== false ? 'bg-cyan-400 shadow-[0_0_8px_#06b6d4] animate-pulse' : 'bg-neutral-600'}`} />
+            OFFLINE {status?.offline_mode !== false ? "✓" : "✗"}
           </span>
         </div>
 

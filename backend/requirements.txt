@@ -23,6 +23,6 @@ langchain-ollama==0.1.0
 # Only required if you stage real RemoteCLIP / Prithvi-EO weights (see
 # models/*/README.md). The app runs fully without them, using clearly
 # labelled placeholder embedders/feature extractors instead.
-# torch==2.3.0
-# open_clip_torch==2.24.0
+torch==2.3.0
+open_clip_torch==2.24.0
 # terratorch==0.1.1

@@ -118,6 +118,9 @@ export interface ChangeRegionItem {
 
 export interface ChangeDetectionResponse {
   status: string;
+  is_fallback?: boolean;
+  result_source?: "backend" | "demo-fallback";
+  fallback_reason?: string;
   message?: string;
   change_id?: string;
   dominant_change_type?: string;
@@ -274,7 +277,7 @@ export async function searchByText(query: string, filters: FilterState = {}, top
   if (filters.polygon) {
     params.set("polygon", JSON.stringify(filters.polygon));
   }
-  
+
   try {
     const res = await fetch(`${API_BASE}/api/search/text?${params.toString()}`);
     if (res.ok) {
@@ -378,13 +381,13 @@ export async function getSystemStatus(): Promise<SystemStatus> {
   try {
     const res = await fetch(`${API_BASE}/api/system/status`);
     if (res.ok) return res.json();
-  } catch (e) {}
+  } catch (e) { }
   return {
     offline_mode: true,
     processing_version: "2.2.0-airgapped",
     models: {
       remoteclip: { staged: true, active_model: "remoteclip-vit-b32-local" },
-      prithvi: { staged: true, active_model: "prithvi-eo-100m-siamese" },
+      prithvi: { staged: false, active_model: "placeholder-diff" },
     },
     paths: {
       model_dir: "/models/weights",
@@ -400,7 +403,7 @@ export async function listScenes() {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) return data;
     }
-  } catch (e) {}
+  } catch (e) { }
 
   return getDemoScenes();
 }
@@ -578,6 +581,9 @@ function downloadFile(content: string, filename: string, mimeType: string) {
 export function getDemoChangeResponse(lon: number, lat: number, dateFrom: string, dateTo: string): ChangeDetectionResponse {
   return {
     status: "ok",
+    is_fallback: true,
+    result_source: "demo-fallback",
+    fallback_reason: fallbackReason,
     dominant_change_type: "construction",
     change_id: "chg-" + Math.floor(lon * 100) + "-" + Math.floor(lat * 100),
     before: {
@@ -795,4 +801,3 @@ export async function sendChatMessage(message: string, context: ChatContext, con
   }
   return res.json();
 }
-

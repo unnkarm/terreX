@@ -50,7 +50,7 @@ export default function WorkspacePage() {
     getSystemStatus()
       .then((systemStatus) => {
         setStatus(systemStatus);
-        setHasData((systemStatus.vector_index_count ?? 0) > 0);
+        setHasData(typeof systemStatus.vector_index_count === "number" ? systemStatus.vector_index_count > 0 : null);
       })
       .catch(() => {
         setStatus(null);

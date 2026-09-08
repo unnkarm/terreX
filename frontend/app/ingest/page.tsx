@@ -144,16 +144,22 @@ export default function IngestPage() {
     try {
       const res = await processIncoming();
       setMetrics(res.metrics || null);
-      addLog(`SUCCESS: Processed ${res.processed.length} new scene(s).`);
+      addLog(`SUCCESS: Processed ${res.processed.length} scene(s).`);
       if (res.metrics) addLog(`METRICS: ${res.metrics.tiles_created} created | ${res.metrics.tiles_skipped} skipped | ${res.metrics.tiles_discarded} discarded | ${res.metrics.elapsed_seconds}s`);
       if (res.skipped?.length) addLog(`INCREMENTAL: Skipped ${res.skipped.length} already-indexed scene(s).`);
+      const repaired = (res.processed || []).filter((item: any) => item.status === "reindexed");
+      if (repaired.length) {
+        const total = repaired.reduce((sum: number, item: any) => sum + (item.reindexed_tiles || 0), 0);
+        addLog(`REPAIR: Rebuilt vector embeddings for ${total} persisted tile(s).`);
+      }
       if (res.failed.length > 0) {
         addLog(`WARNING: ${res.failed.length} scenes failed to process.`);
         res.failed.forEach((f: any) => addLog(` -> ${f.file}: ${f.error}`));
       }
-      addLog("Database indexing complete. Ready for grid query.");
+      if ((res.metrics?.vector_index_count ?? 0) > 0) addLog(`DATABASE INDEXING COMPLETE. Vector index count: ${res.metrics.vector_index_count}.`);
+      else addLog("WARNING: Ingestion completed but the vector index is still empty.");
     } catch (err: any) {
-      addLog(`NOTICE: Using local simulated pipeline: ${err?.message || "Running in offline demo mode."}`);
+      addLog(`ERROR: Backend ingestion failed: ${err?.message || "The ingestion service is unavailable."}`);
     } finally {
       setTimeout(() => setIsProcessing(false), 3500);
     }
@@ -177,9 +183,10 @@ export default function IngestPage() {
       });
       addLog(`SUCCESS: Ingested scene ${res.scene_id} (${res.tiles} tiles created).`);
       addLog(`METRICS: ${res.skipped_tiles || 0} skipped | ${res.discarded_tiles || 0} discarded | ${res.elapsed_seconds || 0}s`);
-      addLog("Database indexing complete. Ready for grid query.");
+      if ((res.index_size ?? 0) > 0) addLog(`DATABASE INDEXING COMPLETE. Vector index count: ${res.index_size}.`);
+      else addLog("WARNING: Scene processing returned no vectors.");
     } catch (err: any) {
-      addLog(`NOTICE: Local offline ingestion complete: ${err?.message || "Air-gapped mode active."}`);
+      addLog(`ERROR: Upload/ingestion failed: ${err?.message || "The ingestion service is unavailable."}`);
     } finally {
       setTimeout(() => setIsProcessing(false), 3500);
     }

@@ -53,15 +53,28 @@ class _RealRemoteCLIP:
     """Loads an actual RemoteCLIP checkpoint via open_clip, fully offline."""
 
     def __init__(self, checkpoint_path: Path):
+        import logging
         import open_clip  # local import: heavy dep, only needed on real path
         import torch
 
         self.torch = torch
         arch = "ViT-B-32" if "ViT-B-32" in checkpoint_path.name else "RN50"
-        self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-            arch, pretrained=None
-        )
-        state_dict = torch.load(checkpoint_path, map_location="cpu")
+        
+        # Suppress the expected open_clip warning about random initialization
+        # since we immediately load our local weights.
+        root_logger = logging.getLogger()
+        old_level = root_logger.level
+        root_logger.setLevel(logging.ERROR)
+        try:
+            self.model, _, self.preprocess = open_clip.create_model_and_transforms(
+                arch, pretrained=None
+            )
+        finally:
+            root_logger.setLevel(old_level)
+
+        # weights_only=True is required in PyTorch 2.x to suppress FutureWarning
+        # and to avoid the error that will be raised in PyTorch 2.6+.
+        state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         self.model.load_state_dict(state_dict)
         self.model.eval()
         self.tokenizer = open_clip.get_tokenizer(arch)
@@ -147,9 +160,9 @@ class EmbeddingService:
                 self._real = _RealRemoteCLIP(self._checkpoint_path)
                 logger.info("Loaded real RemoteCLIP checkpoint: %s", self._checkpoint_path)
             except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    "Found RemoteCLIP checkpoint but failed to load it (%s). "
-                    "Falling back to placeholder embedder.", exc
+                logger.exception(
+                    "Found RemoteCLIP checkpoint but failed to load it. "
+                    "Falling back to placeholder embedder. Error: %s", exc
                 )
                 self._real = None
         else:

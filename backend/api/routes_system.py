@@ -36,13 +36,16 @@ def status():
             "remoteclip": {
                 "staged": not embedding_service.is_placeholder,
                 "active_model": (
-                    "remoteclip" if not embedding_service.is_placeholder
+                    embedding_service._real.model_name if not embedding_service.is_placeholder
                     else embedding_service._placeholder.model_name
                 ),
             },
             "prithvi": {
                 "staged": not prithvi_service.is_placeholder,
-                "active_model": prithvi_service.model_name,
+                "active_model": (
+                    prithvi_service._real.model_name if not prithvi_service.is_placeholder
+                    else prithvi_service._placeholder.model_name
+                ),
             },
         },
         "paths": {

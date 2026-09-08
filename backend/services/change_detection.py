@@ -271,6 +271,8 @@ def run_change_detection(
     if len(candidates) < 2:
         return {
             "status": "insufficient_data",
+            "is_fallback": False,
+            "result_source": "backend",
             "message": (
                 f"Found {len(candidates)} usable observation(s) in the window {date_from} to {date_to}. "
                 "Change detection requires at least 2 usable observations."
@@ -527,6 +529,8 @@ def run_change_detection(
 
         return {
             "status": "ok",
+            "is_fallback": False,
+            "result_source": "backend",
             "change_id": result.change_id,
             "dominant_change_type": dominant_change_type,
             "dominant_dynamics": dominant_dynamics,

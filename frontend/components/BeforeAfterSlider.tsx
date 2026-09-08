@@ -11,6 +11,7 @@ interface BeforeAfterSliderProps {
   afterDate?: string | null;
   dominantChange?: string | null;
   confidence?: number | null;
+  isFallback?: boolean;
 }
 
 type ViewMode = "SPLIT" | "BEFORE" | "AFTER" | "MASK" | "BLEND";
@@ -86,11 +87,10 @@ export default function BeforeAfterSlider({
             <button
               key={m}
               onClick={() => setMode(m)}
-              className={`px-2 py-0.5 text-[9px] font-mono tracking-wider rounded transition-all ${
-                mode === m
+              className={`px-2 py-0.5 text-[9px] font-mono tracking-wider rounded transition-all ${mode === m
                   ? "bg-neutral-800 text-cyan-400 border border-cyan-500/50 font-bold"
                   : "text-neutral-500 hover:text-neutral-300 border border-transparent"
-              }`}
+                }`}
             >
               {m}
             </button>
@@ -110,9 +110,8 @@ export default function BeforeAfterSlider({
         <img
           src={aUrl}
           alt="After Observation"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ${
-            mode === "BEFORE" ? "opacity-0" : "opacity-100"
-          }`}
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ${mode === "BEFORE" ? "opacity-0" : "opacity-100"
+            }`}
         />
 
         {/* BEFORE IMAGE (Clipped overlay based on sliderPos in SPLIT mode) */}
@@ -153,9 +152,8 @@ export default function BeforeAfterSlider({
         {/* CHANGE MASK HEATMAP OVERLAY — real PNG from backend or fallback gradient */}
         {(mode === "MASK" || mode === "SPLIT") && (
           <div
-            className={`absolute inset-0 pointer-events-none transition-opacity ${
-              mode === "MASK" ? "opacity-95" : "opacity-40"
-            }`}
+            className={`absolute inset-0 pointer-events-none transition-opacity ${mode === "MASK" ? "opacity-95" : "opacity-40"
+              }`}
           >
             {resolvedMaskUrl ? (
               // Real change probability map (grayscale PNG) from backend
@@ -206,6 +204,11 @@ export default function BeforeAfterSlider({
           CONFIDENCE: {confidence == null ? "N/A" : `${Math.round(confidence * 100)}%`}
         </span>
       </div>
+      {isFallback && (
+        <div className="border border-amber-700/70 bg-amber-950/40 px-2 py-1.5 text-[9px] font-mono uppercase tracking-wider text-amber-300">
+          Demo fallback result — live backend analysis was unavailable.
+        </div>
+      )}
     </div>
   );
 }
