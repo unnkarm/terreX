@@ -7,15 +7,16 @@ from typing import List, Optional
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Body
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from config import settings
 from db.database import get_db, get_session
-from db.models import Scene
+from db.models import Scene, Tile
 from services.ingestion import ingest_file, IngestionError
 from data_sources import list_available_sources, get_data_source
 from services.vector_store import vector_store
+from services.ingestion import _load_provenance
 
 
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
@@ -128,8 +129,16 @@ def process_incoming():
     ingest them independently — supports incremental indexing without a full rebuild.
     """
     started = time.perf_counter()
+    provenance_errors = []
+    for candidate in list(settings.INCOMING_DIR.rglob("*.tif")) + list(settings.INCOMING_DIR.rglob("*.tiff")):
+        try:
+            _load_provenance(candidate)
+        except IngestionError as exc:
+            provenance_errors.append({"file": candidate.name, "error": str(exc)})
+    if provenance_errors:
+        raise HTTPException(status_code=422, detail={"message": "Incoming imagery failed provenance pre-check", "files": provenance_errors})
     processed, skipped, failed = [], [], []
-    for path in list(settings.INCOMING_DIR.glob("*.tif")) + list(settings.INCOMING_DIR.glob("*.tiff")):
+    for path in list(settings.INCOMING_DIR.rglob("*.tif")) + list(settings.INCOMING_DIR.rglob("*.tiff")):
         try:
             result = ingest_file(path)
             (skipped if result.get("status") == "skipped" else processed).append(result)
@@ -155,6 +164,11 @@ def process_incoming():
 @router.get("/scenes")
 def list_scenes(db: Session = Depends(get_db)):
     scenes = db.execute(select(Scene)).scalars().all()
+    tile_counts = dict(
+        db.execute(
+            select(Tile.scene_id, func.count(Tile.tile_id)).group_by(Tile.scene_id)
+        ).all()
+    )
     return [
         {
             "scene_id": s.scene_id,
@@ -167,9 +181,54 @@ def list_scenes(db: Session = Depends(get_db)):
             "status_reason": s.status_reason,
             "source_hash": s.source_hash,
             "license_source": s.license_source,
+            "source_portal": s.source_portal,
+            "underlying_dataset": s.underlying_dataset,
+            "cloud_cover_pct": s.cloud_cover_pct,
+            "provenance": s.provenance,
             "cog_validation": s.cog_validation,
             "processing_version": s.processing_version,
-            "tile_count": len(s.tiles),
+            "tile_count": tile_counts.get(s.scene_id, 0),
         }
         for s in scenes
     ]
+
+
+@router.get("/stats")
+def get_ingest_stats(db: Session = Depends(get_db)):
+    """Return live ingestion statistics, vector count, and disk telemetry."""
+    v_count = vector_store.count()
+    scenes = db.execute(select(Scene)).scalars().all()
+    tile_counts = dict(
+        db.execute(
+            select(Tile.scene_id, func.count(Tile.tile_id)).group_by(Tile.scene_id)
+        ).all()
+    )
+    incoming_files = [p.name for p in settings.INCOMING_DIR.rglob("*.tif")] + [p.name for p in settings.INCOMING_DIR.rglob("*.tiff")]
+    
+    # Calculate tile counts from disk
+    tiles_on_disk = len(list(settings.TILES_DIR.rglob("*.png")))
+
+    scene_items = [
+        {
+            "scene_id": s.scene_id,
+            "source_filename": s.source_filename,
+            "sensor": s.sensor,
+            "acquisition_date": s.acquisition_date.isoformat() if s.acquisition_date else None,
+            "quality_score": s.quality_score,
+            "cloud_fraction": s.cloud_fraction,
+            "tile_count": tile_counts.get(s.scene_id, 0),
+        }
+        for s in scenes
+    ]
+    
+    return {
+        "vector_count": v_count,
+        "scenes_count": len(scenes),
+        "scenes": scene_items,
+        "tiles_on_disk": tiles_on_disk,
+        "incoming_count": len(incoming_files),
+        "incoming_files": incoming_files,
+        "active_modalities": ["Sentinel-2 L2A (Optical VNIR/SWIR)", "Sentinel-1 GRD (SAR Radar)", "Landsat 8/9 C2L2", "ISRO Resourcesat"],
+        "is_incremental": True,
+    }
+

@@ -84,8 +84,12 @@ class Scene(Base):
     status = Column(String, default="ingested")  # ingested | quarantined | failed
     status_reason = Column(Text, nullable=True)
     source_hash = Column(String, nullable=True, index=True)
+    source_portal = Column(String, nullable=True)
+    underlying_dataset = Column(String, nullable=True)
+    cloud_cover_pct = Column(Float, nullable=True)
     license_source = Column(String, nullable=True)
     cog_validation = Column(JSON, nullable=True)
+    provenance = Column(JSON, nullable=True)
 
     tiles = relationship("Tile", back_populates="scene", cascade="all, delete-orphan")
 

@@ -21,6 +21,7 @@ try:
 except Exception:
     pass
 
+from sqlalchemy.pool import NullPool
 from config import settings
 from db.models import Base
 
@@ -35,10 +36,21 @@ def get_engine():
     if _engine is None:
         db_url = settings.DATABASE_URL
         if "sqlite" in db_url:
-            _engine = create_engine(db_url, connect_args={"check_same_thread": False})
+            _engine = create_engine(
+                db_url,
+                connect_args={"check_same_thread": False},
+                poolclass=NullPool,
+            )
         else:
             try:
-                temp_engine = create_engine(db_url, pool_pre_ping=True)
+                temp_engine = create_engine(
+                    db_url,
+                    pool_pre_ping=True,
+                    pool_size=20,
+                    max_overflow=30,
+                    pool_timeout=60.0,
+                    pool_recycle=1800,
+                )
                 with temp_engine.connect() as conn:
                     pass
                 _engine = temp_engine
@@ -47,7 +59,11 @@ def get_engine():
                 logger.warning("PostgreSQL unreachable (%s). Falling back to SQLite %s", exc, sqlite_path)
                 sqlite_url = f"sqlite:///{sqlite_path.as_posix()}"
                 settings.DATABASE_URL = sqlite_url
-                _engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
+                _engine = create_engine(
+                    sqlite_url,
+                    connect_args={"check_same_thread": False},
+                    poolclass=NullPool,
+                )
 
         _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
     return _engine
@@ -85,7 +101,10 @@ def _ensure_ingestion_schema(engine):
     """Add v2 ingestion columns for databases created by an older checkout."""
     additions = {
         "scenes": {
-            "source_hash": "VARCHAR", "license_source": "VARCHAR", "cog_validation": "JSON",
+            "source_hash": "VARCHAR", "source_portal": "VARCHAR", "underlying_dataset": "VARCHAR",
+            "cloud_cover_pct": "FLOAT", "license_source": "VARCHAR", "cog_validation": "JSON",
+            # provenance was added to the ORM model after initial schema creation
+            "provenance": "JSON",
         },
         "tiles": {
             "quality_mask_path": "VARCHAR", "clear_fraction": "FLOAT", "quality_mask_summary": "JSON",

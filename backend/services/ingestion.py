@@ -16,6 +16,7 @@ import shutil
 import hashlib
 import uuid
 import time
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Dict, Tuple
@@ -28,6 +29,7 @@ from PIL import Image
 from shapely.geometry import box
 from geoalchemy2.shape import from_shape
 from sqlalchemy import select
+from sqlalchemy.orm import defer
 
 from config import settings
 from db.database import get_session
@@ -40,6 +42,37 @@ from services.quality import (
 from services.algorithms.spectral import compute_spectral_indices
 
 logger = logging.getLogger("terrex.ingestion")
+
+
+def _load_provenance(path: Path) -> Dict[str, Any]:
+    sidecar = path.with_name(f"{path.stem}.provenance.json")
+    if not sidecar.exists():
+        raise IngestionError(f"Missing provenance sidecar: {sidecar.name}")
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise IngestionError(f"Invalid provenance JSON {sidecar.name}: {exc}") from exc
+    required = ("source_portal", "underlying_dataset", "satellite", "sensor", "acquisition_date", "resolution_m", "bounding_box", "license", "download_date", "ps_named_source")
+    missing = [key for key in required if key not in data]
+    if missing:
+        raise IngestionError(f"Provenance sidecar {sidecar.name} missing fields: {', '.join(missing)}")
+    if data["source_portal"] not in {"Bhoonidhi", "Bhuvan", "Copernicus Data Space Ecosystem", "Google Earth Engine", "USGS EarthExplorer"}:
+        raise IngestionError(f"Provenance sidecar {sidecar.name} has an unsupported source_portal")
+    if data["underlying_dataset"] not in {"Sentinel-2 L2A", "Sentinel-1 GRD", "Landsat 8/9 C2L2", "AWiFS", "LISS-III", "LISS-IV", "Cartosat-2S"}:
+        raise IngestionError(f"Provenance sidecar {sidecar.name} has an unsupported underlying_dataset")
+    for date_key in ("acquisition_date", "download_date"):
+        try:
+            datetime.strptime(str(data[date_key]), "%Y-%m-%d")
+        except ValueError as exc:
+            raise IngestionError(f"Provenance {date_key} must be YYYY-MM-DD") from exc
+    try:
+        if float(data["resolution_m"]) <= 0:
+            raise IngestionError(f"Provenance sidecar {sidecar.name} has invalid resolution_m")
+    except (TypeError, ValueError) as exc:
+        raise IngestionError(f"Provenance sidecar {sidecar.name} has invalid resolution_m") from exc
+    if not isinstance(data["bounding_box"], list) or len(data["bounding_box"]) != 4:
+        raise IngestionError(f"Provenance sidecar {sidecar.name} has an invalid bounding_box")
+    return data
 
 
 def safe_from_shape(shape, srid: int = 4326):
@@ -204,8 +237,21 @@ def _extract_sensor_and_date(dataset: rasterio.DatasetReader, filename: str) -> 
     return sensor or "unknown", acq_date
 
 
+def _get_dataset_spatial_info(dataset: rasterio.DatasetReader):
+    """Derive effective CRS and transform from dataset CRS or GCPs."""
+    if dataset.crs is not None:
+        return dataset.crs, dataset.transform
+    if dataset.gcps and dataset.gcps[0]:
+        from rasterio.transform import from_gcps
+        crs = dataset.gcps[1] if dataset.gcps[1] is not None else rasterio.crs.CRS.from_epsg(4326)
+        transform = from_gcps(dataset.gcps[0])
+        return crs, transform
+    return None, dataset.transform
+
+
 def validate_dataset(dataset: rasterio.DatasetReader):
-    if dataset.crs is None:
+    has_gcp_crs = bool(dataset.gcps and dataset.gcps[0])
+    if dataset.crs is None and not has_gcp_crs:
         raise IngestionError("Missing CRS (Coordinate Reference System)")
     if dataset.width < MIN_DIMENSION or dataset.height < MIN_DIMENSION:
         raise IngestionError(f"Dimensions too small: {dataset.width}x{dataset.height}")
@@ -286,19 +332,22 @@ def _compute_tile_bounds_wgs84(
     width: int,
     height: int,
 ) -> Tuple[float, float, float, float, float, float]:
-    transform_mat = dataset.transform
+    crs, transform_mat = _get_dataset_spatial_info(dataset)
     x0, y0 = rasterio.transform.xy(transform_mat, row_off, col_off, offset="ul")
     x1, y1 = rasterio.transform.xy(transform_mat, row_off + height, col_off + width, offset="lr")
 
     min_x, max_x = min(x0, x1), max(x0, x1)
     min_y, max_y = min(y0, y1), max(y0, y1)
 
-    if dataset.crs.to_string() == "EPSG:4326":
+    if crs and (crs.to_string() == "EPSG:4326" or getattr(crs, "to_epsg", lambda: None)() == 4326):
         min_lon, min_lat, max_lon, max_lat = min_x, min_y, max_x, max_y
-    else:
+    elif crs:
         min_lon, min_lat, max_lon, max_lat = transform_bounds(
-            dataset.crs, "EPSG:4326", min_x, min_y, max_x, max_y
+            crs, "EPSG:4326", min_x, min_y, max_x, max_y
         )
+    else:
+        min_lon, min_lat, max_lon, max_lat = min_x, min_y, max_x, max_y
+
     center_lon = (float(min_lon) + float(max_lon)) / 2.0
     center_lat = (float(min_lat) + float(max_lat)) / 2.0
     return float(min_lon), float(min_lat), float(max_lon), float(max_lat), float(center_lon), float(center_lat)
@@ -331,15 +380,38 @@ def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
     with rasterio.open(path) as dataset:
         try:
             validate_dataset(dataset)
+
+            provenance_data = _load_provenance(path)
+
         except IngestionError as exc:
             _record_quarantine(path, str(exc))
             raise
 
         sensor, acq_date = _extract_sensor_and_date(dataset, path.name)
+        # Provenance is authoritative for source metadata; raster tags are only
+        # a fallback for legacy files that predate the sidecar requirement.
+        if provenance_data.get("sensor"):
+            sensor = str(provenance_data["sensor"])
+        if provenance_data.get("acquisition_date"):
+            try:
+                acq_date = datetime.strptime(str(provenance_data["acquisition_date"]), "%Y-%m-%d")
+            except ValueError as exc:
+                raise IngestionError("Provenance acquisition_date must be YYYY-MM-DD") from exc
         band_map = _resolve_band_map(dataset, sensor)
-        bounds_wgs84 = transform_bounds(dataset.crs, "EPSG:4326", *dataset.bounds)
+        effective_crs, effective_transform = _get_dataset_spatial_info(dataset)
+        if dataset.crs is not None:
+            bounds_wgs84 = transform_bounds(dataset.crs, "EPSG:4326", *dataset.bounds)
+        else:
+            x0, y0 = rasterio.transform.xy(effective_transform, 0, 0, offset="ul")
+            x1, y1 = rasterio.transform.xy(effective_transform, dataset.height, dataset.width, offset="lr")
+            min_x, max_x = min(x0, x1), max(x0, x1)
+            min_y, max_y = min(y0, y1), max(y0, y1)
+            if effective_crs and effective_crs.to_string() != "EPSG:4326" and getattr(effective_crs, "to_epsg", lambda: None)() != 4326:
+                bounds_wgs84 = transform_bounds(effective_crs, "EPSG:4326", min_x, min_y, max_x, max_y)
+            else:
+                bounds_wgs84 = (min_x, min_y, max_x, max_y)
         footprint = box(*bounds_wgs84)
-        resolution_m = float(abs(dataset.transform.a))
+        resolution_m = float(provenance_data.get("resolution_m") or abs(effective_transform.a))
 
         final_path = path
         if move_to_scenes:
@@ -357,7 +429,7 @@ def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
                 sensor=sensor,
                 acquisition_date=acq_date,
                 resolution_m=resolution_m,
-                crs=str(dataset.crs),
+                crs=str(effective_crs),
                 width=int(dataset.width),
                 height=int(dataset.height),
                 band_count=int(dataset.count),
@@ -368,7 +440,11 @@ def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
                 processing_version=settings.PROCESSING_VERSION,
                 status="ingested",
                 source_hash=source_hash,
-                license_source="unknown",
+                source_portal=provenance_data.get("source_portal"),
+                underlying_dataset=provenance_data.get("underlying_dataset"),
+                cloud_cover_pct=provenance_data.get("cloud_cover_pct"),
+                license_source=provenance_data.get("license", "unknown"),
+                provenance=provenance_data,
                 cog_validation=cog_info,
             )
             session.add(scene)
@@ -512,7 +588,7 @@ def _tile_and_index_windowed(
                 quality_mask_summary=quality_summary,
                 radiometric_stats=radiometric_stats,
                 spectral_indices=spectral_indices,
-                provenance={"source_scene_id": str(scene.scene_id), "source_filename": scene.source_filename, "acquisition_timestamp": scene.acquisition_date.isoformat() if scene.acquisition_date else None, "crs": scene.crs, "footprint_geometry": tile_poly.wkt, "quality_mask_summary": quality_summary, "radiometric_stats": radiometric_stats, "processing_steps": [{"step": "windowed_tiling", "params": {"size": ts}}, {"step": "quality_masking", "method": quality_summary.get("method", "heuristic")}, {"step": "embedding", "model": emb.model_name, "model_version": emb.model_version}], "ingest_timestamp": datetime.utcnow().isoformat(), "license_source": scene.license_source},
+                provenance={"source_scene_id": str(scene.scene_id), "source_filename": scene.source_filename, "acquisition_timestamp": scene.acquisition_date.isoformat() if scene.acquisition_date else None, "crs": scene.crs, "footprint_geometry": tile_poly.wkt, "quality_mask_summary": quality_summary, "radiometric_stats": radiometric_stats, "processing_steps": [{"step": "windowed_tiling", "params": {"size": ts}}, {"step": "quality_masking", "method": quality_summary.get("method", "heuristic")}, {"step": "embedding", "model": emb.model_name, "model_version": emb.model_version}], "ingest_timestamp": datetime.utcnow().isoformat(), "license_source": scene.license_source, "dataset_provenance": scene.provenance},
                 thumbnail_path=str(thumb_path),
                 tile_path=str(thumb_path),
                 embedding=emb.vector.tolist() if hasattr(emb.vector, "tolist") else list(emb.vector),

@@ -18,13 +18,13 @@ logger = logging.getLogger("terrex.vector_store")
 
 def _sensor_aliases(sensor: str) -> list[str]:
     normalized = sensor.lower().replace("-", "").replace("_", "").replace(" ", "")
-    aliases = {sensor}
-    if "sentinel2" in normalized:
-        aliases.update({"Sentinel-2", "Sentinel-2 MSI", "Sentinel2", "sentinel-2", "sentinel2"})
-    elif "sentinel1" in normalized:
-        aliases.update({"Sentinel-1", "Sentinel-1 SAR", "Sentinel1", "sentinel-1", "sentinel1"})
-    elif "landsat8" in normalized:
-        aliases.update({"Landsat-8", "Landsat-8 OLI", "Landsat8", "landsat-8", "landsat8"})
+    aliases = {sensor, sensor.lower(), sensor.upper()}
+    if "sentinel2" in normalized or "msi" in normalized or normalized == "s2":
+        aliases.update({"Sentinel-2", "Sentinel-2 MSI", "Sentinel2", "sentinel-2", "sentinel2", "MSI", "msi", "s2", "S2"})
+    elif "sentinel1" in normalized or "sarc" in normalized or "sar" in normalized or normalized == "s1":
+        aliases.update({"Sentinel-1", "Sentinel-1 SAR", "Sentinel1", "sentinel-1", "sentinel1", "SAR-C", "sar-c", "SAR", "sar", "s1", "S1", "C-SAR"})
+    elif "landsat8" in normalized or "landsat9" in normalized or "oli" in normalized or "landsat" in normalized:
+        aliases.update({"Landsat-8", "Landsat-8 OLI", "Landsat8", "landsat-8", "landsat8", "Landsat 8/9 C2L2", "OLI", "oli", "OLI_TIRS", "TIRS", "Landsat", "landsat"})
     return sorted(aliases)
 
 

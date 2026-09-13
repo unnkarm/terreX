@@ -13,9 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-import json
-import urllib.request
-import urllib.error
 from data_sources.base import BaseEODataSource, EOSearchResult
 
 logger = logging.getLogger("terrex.data_sources.sentinel2")
@@ -36,49 +33,10 @@ class Sentinel2DataSource(BaseEODataSource):
         max_cloud_cover: float = 20.0,
         limit: int = 10,
     ) -> List[EOSearchResult]:
-        payload = {
-            "collections": ["sentinel-2-l2a"],
-            "bbox": bbox_wgs84,
-            "datetime": f"{start_date}/{end_date}",
-            "query": {"eo:cloud_cover": {"lt": max_cloud_cover}},
-            "limit": limit,
-            "sortby": [{"field": "properties.datetime", "direction": "desc"}],
-        }
-
-        try:
-            req = urllib.request.Request(
-                self.STAC_SEARCH_URL,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json", "User-Agent": "TerreX/1.0"},
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                features = data.get("features", [])
-        except Exception as exc:
-            logger.warning("Planetary Computer search encountered network issue: %s. Returning structured results.", exc)
-            return []
-
-        results = []
-        for feat in features:
-            props = feat.get("properties", {})
-            dt_str = props.get("datetime", "")
-            acq_dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00")) if dt_str else datetime.utcnow()
-            cloud = props.get("eo:cloud_cover", 5.0)
-
-            results.append(
-                EOSearchResult(
-                    item_id=feat.get("id", "S2_UNKNOWN"),
-                    provider=self.provider_id,
-                    dataset_name="Sentinel-2 L2A BOA Multispectral",
-                    acquisition_date=acq_dt,
-                    cloud_cover_percent=round(cloud, 1),
-                    bbox_wgs84=feat.get("bbox", bbox_wgs84),
-                    spatial_resolution_m=10.0,
-                    bands=["B02", "B03", "B04", "B08", "B11", "B12", "SCL"],
-                    metadata=props,
-                )
-            )
-        return results
+        # Runtime is air-gapped.  Sentinel-2 acquisition is performed only by
+        # scripts/acquire_sentinel2.py through Bhoonidhi before the demo.
+        logger.info("Offline runtime: Sentinel-2 catalog search is disabled")
+        return []
 
     def stage_to_cog(
         self,

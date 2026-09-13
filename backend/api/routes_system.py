@@ -42,10 +42,10 @@ def status():
             },
             "prithvi": {
                 "staged": not prithvi_service.is_placeholder,
-                "active_model": (
-                    prithvi_service._real.model_name if not prithvi_service.is_placeholder
-                    else prithvi_service._placeholder.model_name
-                ),
+                # Use the .model_name property — handles ONNX, PyTorch, and placeholder
+                # correctly. Directly accessing ._real when the ONNX backend is active
+                # causes an AttributeError because _real is None in that case.
+                "active_model": prithvi_service.model_name,
             },
         },
         "paths": {
@@ -61,3 +61,39 @@ def status():
         "embedding_version_warning": embedding_version_warning,
         "capabilities": CAPABILITIES,
     }
+
+
+import json
+from fastapi.responses import FileResponse
+
+@router.get("/export/manifest")
+def export_manifest():
+    """
+    Exports a complete provenance manifest of all ingested data to satisfy PS 2.2.5.
+    Creates a JSONL file in data/provenance/manifest.jsonl and returns it.
+    """
+    manifest_path = settings.DATA_DIR / "provenance" / "manifest.jsonl"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with get_session() as session:
+        from db.models import Scene
+        scenes = session.execute(select(Scene)).scalars().all()
+
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            for s in scenes:
+                record = {
+                    "scene_id": str(s.scene_id),
+                    "source_filename": s.source_filename,
+                    "acquisition_date": s.acquisition_date.isoformat() if s.acquisition_date else None,
+                    "sensor": s.sensor,
+                    "source_portal": s.source_portal,
+                    "underlying_dataset": s.underlying_dataset,
+                    "cloud_cover_pct": s.cloud_cover_pct,
+                    "license_source": s.license_source,
+                    "provenance": s.provenance,
+                    "status": s.status,
+                    "ingested_at": s.ingested_at.isoformat() if s.ingested_at else None,
+                }
+                f.write(json.dumps(record) + "\n")
+
+    return FileResponse(path=str(manifest_path), filename="manifest.jsonl", media_type="application/jsonlines")

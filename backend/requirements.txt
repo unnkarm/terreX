@@ -26,3 +26,9 @@ langchain-ollama==0.1.0
 torch==2.3.0
 open_clip_torch==2.24.0
 # terratorch==0.1.1
+
+# --- ONNX Runtime (required for prithvi_int8.onnx fast CPU inference) -------
+# onnxruntime is NOT an optional dep when the INT8 ONNX model is staged.
+# Intentionally pinned alongside requirements-ml.txt; GPU users should use
+# onnxruntime-gpu instead and remove this line.
+onnxruntime>=1.18.0

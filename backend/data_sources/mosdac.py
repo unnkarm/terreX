@@ -21,9 +21,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-import json
-import urllib.request
-import urllib.error
 from data_sources.base import BaseEODataSource, EOSearchResult
 
 logger = logging.getLogger("terrex.data_sources.mosdac")
@@ -56,46 +53,7 @@ class MosdacDataSource(BaseEODataSource):
         Query ISRO MOSDAC API catalog using datasetId, startTime, endTime, and boundingBox.
         Falls back to local Indian catalog cache if external gateway is in air-gapped mode.
         """
-        min_lon, min_lat, max_lon, max_lat = bbox_wgs84
-        bbox_str = f"{min_lon},{min_lat},{max_lon},{max_lat}"
-
-        # Attempt live API call if online
-        try:
-            params = {
-                "datasetId": "3DIMG_L1B_STD",
-                "startTime": f"{start_date}T00:00:00",
-                "endTime": f"{end_date}T23:59:59",
-                "boundingBox": bbox_str,
-                "count": limit,
-            }
-            import urllib.parse
-            query_str = urllib.parse.urlencode(params)
-            req = urllib.request.Request(f"{self.MOSDAC_API_SEARCH}?{query_str}", headers={"User-Agent": "TerreX/1.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    results = []
-                    for item in data.get("results", []):
-                        results.append(
-                            EOSearchResult(
-                                item_id=item.get("id", "MOSDAC_ITEM"),
-                                provider=self.provider_id,
-                                dataset_name=item.get("datasetName", "ISRO Satellite Product"),
-                                acquisition_date=datetime.fromisoformat(item.get("timestamp", datetime.utcnow().isoformat())),
-                                cloud_cover_percent=item.get("cloudPercent", 5.0),
-                                bbox_wgs84=bbox_wgs84,
-                                spatial_resolution_m=item.get("resolution", 1000.0),
-                                bands=item.get("bands", ["VIS", "TIR", "SWIR"]),
-                                download_url=item.get("downloadUrl"),
-                                metadata=item,
-                            )
-                        )
-                if results:
-                    return results
-        except Exception as exc:
-            logger.debug("MOSDAC live query bypassed (offline air-gap active): %s", exc)
-
-        # High-fidelity offline Indian catalog entries for demo resilience
+        # Runtime is air-gapped. Return only the checked-in catalog fallback.
         return [
             EOSearchResult(
                 item_id="MOSDAC_INSAT3D_KOLKATA_20240412",
@@ -181,4 +139,3 @@ class MosdacDataSource(BaseEODataSource):
                 PROVIDER="isro-mosdac",
                 ITEM_ID=item.item_id,
             )
-

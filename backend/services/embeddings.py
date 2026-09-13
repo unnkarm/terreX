@@ -154,6 +154,14 @@ class EmbeddingService:
     def __init__(self):
         self.dim = settings.EMBEDDING_DIM
         self._real: Optional[_RealRemoteCLIP] = None
+        self._loaded = False
+        self._checkpoint_path = None
+        self._placeholder = _PlaceholderVisualEmbedder(self.dim)
+
+    def _ensure_loaded(self):
+        if self._loaded:
+            return
+        self._loaded = True
         self._checkpoint_path = self._find_checkpoint()
         if self._checkpoint_path is not None:
             try:
@@ -172,7 +180,6 @@ class EmbeddingService:
                 "semantic AI similarity. See README for staging instructions.",
                 settings.REMOTECLIP_DIR,
             )
-        self._placeholder = _PlaceholderVisualEmbedder(self.dim)
 
     def _find_checkpoint(self) -> Optional[Path]:
         if not settings.REMOTECLIP_DIR.exists():
@@ -187,10 +194,19 @@ class EmbeddingService:
 
     @property
     def is_placeholder(self) -> bool:
+        self._ensure_loaded()
         return self._real is None
 
     @property
+    def model_name(self) -> str:
+        self._ensure_loaded()
+        if self._real is not None:
+            return self._real.model_name
+        return self._placeholder.model_name
+
+    @property
     def model_version(self) -> str:
+        self._ensure_loaded()
         if self._real is None:
             return "placeholder-visual-hash-v1"
         try:
@@ -200,6 +216,7 @@ class EmbeddingService:
             return self._real.model_name
 
     def embed_text(self, text: str) -> EmbeddingResult:
+        self._ensure_loaded()
         if self._real is not None:
             vec = self._real.embed_text(text)
             return EmbeddingResult(vec, self._real.model_name, False, self.model_version)
@@ -207,6 +224,7 @@ class EmbeddingService:
         return EmbeddingResult(vec, self._placeholder.model_name, True, self.model_version)
 
     def embed_image(self, image: Image.Image) -> EmbeddingResult:
+        self._ensure_loaded()
         if self._real is not None:
             vec = self._real.embed_image(image)
             return EmbeddingResult(vec, self._real.model_name, False, self.model_version)
