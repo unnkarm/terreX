@@ -44,10 +44,10 @@ def compute_final_score(
     else:
         relevance_gate = 1.0
 
-    w_sem = 0.70
+    w_sem = 0.65
     w_qual = 0.15
     w_meta = 0.10
-    w_geo = 0.05
+    w_geo = 0.10
 
     base_score = (
         w_sem * calibrated_sem
@@ -56,7 +56,10 @@ def compute_final_score(
         + w_geo * float(geo_relevance)
     )
 
-    final = float(np.clip(base_score * relevance_gate, 0.0, 1.0))
+    # When a geographic target was extracted, apply spatial decay gating
+    # so out-of-district tiles are suppressed
+    geo_gate = (float(geo_relevance) ** 1.5) if geo_relevance < 0.999 else 1.0
+    final = float(np.clip(base_score * relevance_gate * geo_gate, 0.0, 1.0))
 
     breakdown = {
         "raw_similarity": round(semantic_score, 4),

@@ -148,6 +148,9 @@ def search_text(
         except Exception:
             pass
 
+    if sensor and sensor.lower().strip() in ("all", "all sensors", "all_sensors", "", "none"):
+        sensor = None
+
     return semantic_text_search(
         query=q, top_k=top_k, sensor=sensor, date_from=date_from, date_to=date_to,
         min_similarity=min_similarity, aoi_bbox=aoi_bbox, aoi_polygon=aoi_poly,
@@ -161,10 +164,14 @@ def search_text_post(req: TextSearchRequest = Body(...)):
     if None not in (req.min_lon, req.min_lat, req.max_lon, req.max_lat):
         aoi_bbox = (req.min_lon, req.min_lat, req.max_lon, req.max_lat)
 
+    sensor = req.sensor
+    if sensor and sensor.lower().strip() in ("all", "all sensors", "all_sensors", "", "none"):
+        sensor = None
+
     return semantic_text_search(
         query=req.query,
         top_k=req.top_k,
-        sensor=req.sensor,
+        sensor=sensor,
         date_from=req.date_from,
         date_to=req.date_to,
         min_similarity=req.min_similarity,
@@ -181,20 +188,33 @@ async def search_image(
     date_from: Optional[str] = Form(None),
     date_to: Optional[str] = Form(None),
     min_similarity: float = Form(0.0),
+    min_lon: Optional[float] = Form(None),
+    min_lat: Optional[float] = Form(None),
+    max_lon: Optional[float] = Form(None),
+    max_lat: Optional[float] = Form(None),
     polygon: Optional[str] = Form(None),
 ):
     try:
         contents = await file.read()
         image = decode_image_bytes(contents)
+        
+        aoi_bbox = None
+        if None not in (min_lon, min_lat, max_lon, max_lat):
+            aoi_bbox = (min_lon, min_lat, max_lon, max_lat)
+
         aoi_poly = None
         if polygon:
             try:
                 aoi_poly = json.loads(polygon)
             except Exception:
                 pass
+
+        if sensor and sensor.lower().strip() in ("all", "all sensors", "all_sensors", "", "none"):
+            sensor = None
+
         return image_to_image_search(
             image=image, top_k=top_k, sensor=sensor, date_from=date_from,
-            date_to=date_to, min_similarity=min_similarity, aoi_polygon=aoi_poly,
+            date_to=date_to, min_similarity=min_similarity, aoi_bbox=aoi_bbox, aoi_polygon=aoi_poly,
         )
     except HTTPException:
         raise

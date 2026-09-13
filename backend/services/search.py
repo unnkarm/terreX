@@ -7,6 +7,7 @@ PostGIS metadata join/filter -> hybrid ranking.
 """
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import datetime
 from typing import Optional, Any, Dict
@@ -32,6 +33,8 @@ KNOWN_GAZETTEER: Dict[str, Dict[str, Any]] = {
     "new town": {"name": "New Town Rajarhat", "lon": 88.46, "lat": 22.58},
     "rajarhat": {"name": "Rajarhat Action Area", "lon": 88.47, "lat": 22.59},
     "biswa bangla": {"name": "Biswa Bangla Gate", "lon": 88.468, "lat": 22.585},
+    "salt lake": {"name": "Salt Lake (Bidhannagar)", "lon": 88.41, "lat": 22.58},
+    "sector 5": {"name": "Salt Lake Sector V", "lon": 88.433, "lat": 22.574},
 }
 
 
@@ -58,6 +61,81 @@ def _parse_polygon_geometry(poly_input: Any) -> Optional[Polygon]:
     return None
 
 
+def _derive_classification_label(
+    tile: Tile,
+    query: Optional[str] = None,
+    place_info: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Dynamically produce an accurate descriptive physical classification label for the candidate tile
+    based on the tile's physical spectral indices (NDVI/NDWI/NDBI), radiometric stats,
+    sensor modality, and surrounding geographic landmark context.
+    """
+    spec = tile.spectral_indices or {}
+    radio = tile.radiometric_stats or {}
+    band_means = radio.get("band_means", [])
+
+    ndvi = float(spec.get("ndvi_mean", 0.0) or 0.0)
+    ndwi = float(spec.get("ndwi_mean", 0.0) or 0.0)
+    ndbi = float(spec.get("ndbi_mean", 0.0) or 0.0)
+    sensor = (tile.sensor or "").upper()
+
+    ftype = place_info.get("feature_type", "") if place_info else ""
+    zone = place_info.get("zone", "") if place_info else ""
+
+    # 1. SAR Modality Classification
+    if "SAR" in sensor:
+        if ndbi > -0.486:
+            return "RADAR HIGH-SCATTER URBAN STRUCTURE"
+        elif ndbi < -0.490:
+            return "RADAR SMOOTH SURFACE / WATERWAY"
+        else:
+            return "RADAR MIXED TERRAIN & BUILT-UP"
+
+    # 2. Optical Multi-Spectral (MSI) Classification
+    # Check for Water Body (River, Canal, Wetland, Jheel)
+    if ndwi > 0.05 or (ndwi > -0.15 and ndvi < -0.05 and ndbi < -0.15):
+        if "wetland" in ftype or "wetland" in zone.lower():
+            return "WETLAND & AQUACULTURE BASIN"
+        return "HOOGHLY WATERWAY & AQUATIC BASIN"
+
+    if ndwi > -0.10 and ndvi > 0.05 and ndbi < -0.10:
+        return "WETLAND & RIPARIAN SHORELINE"
+
+    # Check for Dense Vegetation / Forest / Tree Canopy
+    if ndvi > 0.30:
+        return "DENSE VEGETATED CANOPY / WOODLAND"
+    elif ndvi > 0.15:
+        if "park" in ftype or "lake" in ftype:
+            return "URBAN PARKLAND & CIVIC GREEN"
+        return "VEGETATED CANOPY & MIXED GREENS"
+    elif ndvi > 0.05 and ndbi < -0.10:
+        return "AGRICULTURAL CULTIVATION / AGRO-TERRAIN"
+
+    # Check for High-Density Built-up / Commercial / Industrial
+    if ndbi > 0.04 or (len(band_means) >= 3 and sum(band_means) / 3.0 > 130 and ndvi < 0.0):
+        if "transit" in ftype or "railway" in ftype:
+            return "TRANSIT INFRASTRUCTURE & TERMINAL"
+        elif "port" in ftype or "maritime" in ftype:
+            return "PORT & MARITIME LOGISTICS"
+        elif "commercial" in ftype or "it" in ftype:
+            return "HIGH-DENSITY COMMERCIAL FABRIC"
+        elif "airport" in ftype:
+            return "AIRPORT & RUNWAY INFRASTRUCTURE"
+        return "HIGH-DENSITY URBAN BUILT-UP"
+
+    if ndbi > -0.08 or (len(band_means) >= 3 and sum(band_means) / 3.0 > 85):
+        if "residential" in ftype:
+            return "PLANNED RESIDENTIAL URBAN FABRIC"
+        return "URBAN RESIDENTIAL DEVELOPMENT"
+
+    # Low reflection / open terrain / cleared ground
+    if ndbi < -0.20 and ndvi < 0.05:
+        return "OPEN TERRAIN & LOW-REFLECTIVE GROUND"
+
+    return "MIXED URBAN & PERI-URBAN TERRAIN"
+
+
 def _hits_to_results(
     hits,
     session,
@@ -66,26 +144,26 @@ def _hits_to_results(
     aoi_polygon: Optional[Polygon] = None,
     spatial_relation: Optional[Any] = None,
     max_cloud: Optional[float] = None,
+    query: Optional[str] = None,
 ):
+    from services.offline_geocoder import offline_geocoder
+
     results = []
-    tile_ids = [h.payload.get("tile_id") for h in hits if h.payload]
-    tile_ids = [t for t in tile_ids if t]
+    tile_ids = [str(h.payload.get("tile_id")) for h in hits if h.payload and h.payload.get("tile_id")]
+    tile_ids = list(dict.fromkeys(tile_ids))
     if not tile_ids:
         return results
-    tile_id_objs = []
-    for tid in tile_ids:
-        tile_id_objs.append(tid)
-        try:
-            tile_id_objs.append(uuid.UUID(str(tid)))
-        except Exception:
-            pass
 
     tiles = {str(t.tile_id): t for t in session.execute(
-        select(Tile).options(defer(Tile.geometry)).where(Tile.tile_id.in_(tile_id_objs))
+        select(Tile).options(defer(Tile.geometry)).where(Tile.tile_id.in_(tile_ids))
+    ).scalars()}
+    scene_ids = list({str(t.scene_id) for t in tiles.values()})
+    scenes = {str(s.scene_id): s for s in session.execute(
+        select(Scene).where(Scene.scene_id.in_(scene_ids))
     ).scalars()}
 
     feedback_rows = session.execute(
-        select(Feedback).where(Feedback.target_id.in_(tile_id_objs))
+        select(Feedback).where(Feedback.target_id.in_(tile_ids))
     ).scalars().all()
     confirms = Counter(str(row.target_id) for row in feedback_rows if row.verdict == "confirm")
     rejects = Counter(str(row.target_id) for row in feedback_rows if row.verdict == "reject")
@@ -95,6 +173,7 @@ def _hits_to_results(
         tile = tiles.get(tile_id_str)
         if tile is None:
             continue
+        scene = scenes.get(str(tile.scene_id))
 
         # 1. Precise Geometric Polygon Filtering (Tier 1.1)
         if aoi_polygon is not None:
@@ -108,24 +187,36 @@ def _hits_to_results(
 
         semantic_score = float(h.score)
 
-        # 3. Spatial Proximity / Landmark relevance
+        # 3. Dynamic reverse-geocoding for this specific tile's coordinates
+        tile_place = offline_geocoder.reverse_geocode(tile.lon, tile.lat)
+        loc_label = tile_place["subtitle"]
+
+        # 4. Spatial Proximity / Landmark relevance
         geo_relevance = 1.0
-        loc_label = None
         if target_loc:
-            dist_sq = (tile.lon - target_loc["lon"]) ** 2 + (tile.lat - target_loc["lat"]) ** 2
-            geo_relevance = float(max(0.1, 1.0 - min(dist_sq / 0.5, 0.9)))
-            loc_label = target_loc["name"]
+            tgt_lon = target_loc.get("lon")
+            tgt_lat = target_loc.get("lat")
+            if tgt_lon is not None and tgt_lat is not None:
+                d_lon_km = (tile.lon - tgt_lon) * 102.8
+                d_lat_km = (tile.lat - tgt_lat) * 111.0
+                dist_km = math.sqrt(d_lon_km ** 2 + d_lat_km ** 2)
+
+                # If query specifically targeted this location, exclude completely out-of-district tiles
+                if dist_km > 12.0:
+                    continue
+                elif dist_km <= 2.0:
+                    geo_relevance = 1.0
+                else:
+                    geo_relevance = float(math.exp(-0.5 * ((dist_km - 2.0) / 2.5) ** 2))
         elif spatial_relation is not None:
-            # Real geometric proximity (PostGIS / Shapely)
             dist_km = compute_distance_km(tile.lon, tile.lat, spatial_relation.target)
             if dist_km is not None:
                 max_d = spatial_relation.distance_km
-                if spatial_relation.relation_type == "within" and dist_km > max_d * 1.5:
-                    # Filter out or heavily penalize if beyond requested distance
+                if spatial_relation.relation_type in ("within", "in") and dist_km > max_d * 2.0:
                     continue
-                # Proximity boost within range
-                geo_relevance = float(max(0.1, 1.0 - min(dist_km / (max_d * 2.0), 0.9)))
-                loc_label = f"{spatial_relation.resolved_feature_name or spatial_relation.target} ({dist_km:.1f} km)"
+                elif dist_km > 12.0:
+                    continue
+                geo_relevance = float(math.exp(-0.5 * (max(0.0, dist_km - max_d) / 2.5) ** 2))
 
         final_score, breakdown = compute_final_score(
             semantic_score=semantic_score,
@@ -140,11 +231,14 @@ def _hits_to_results(
         breakdown["feedback_adjustment"] = round(feedback_adjustment, 3)
         breakdown["geo"] = round(geo_relevance, 3)
 
+        class_label = _derive_classification_label(tile, query=query, place_info=tile_place)
+
         results.append({
             "tile_id": str(tile.tile_id),
             "scene_id": str(tile.scene_id),
             "lon": tile.lon,
             "lat": tile.lat,
+            "classification_label": class_label,
             "similarity_score": breakdown.get("semantic", semantic_score),
             "raw_similarity": semantic_score,
             "final_score": final_score,
@@ -153,10 +247,17 @@ def _hits_to_results(
             "sensor": tile.sensor,
             "quality_score": tile.quality_score,
             "cloud_fraction": tile.cloud_fraction,
+            "cloud_cover_pct": scene.cloud_cover_pct if scene else None,
             "thumbnail_path": tile.thumbnail_path,
             "embedding_model": tile.embedding_model,
             "embedding_is_placeholder": tile.embedding_is_placeholder,
             "location_name": loc_label,
+            "neighborhood": tile_place.get("name"),
+            "zone": tile_place.get("zone"),
+            "source_portal": scene.source_portal if scene else None,
+            "underlying_dataset": scene.underlying_dataset if scene else None,
+            "license": scene.license_source if scene else None,
+            "provenance": scene.provenance if scene else None,
         })
     results.sort(key=lambda r: r["final_score"], reverse=True)
     return results
@@ -187,32 +288,49 @@ def semantic_text_search(
     # Tier 1.1 — AOI Polygon Geometry Parsing
     shapely_poly = _parse_polygon_geometry(aoi_polygon)
     if shapely_poly is not None and aoi_bbox is None:
-        # Compute polygon envelope for initial fast vector store bbox bounding
         minx, miny, maxx, maxy = shapely_poly.bounds
         aoi_bbox = (minx, miny, maxx, maxy)
 
-    # Detect if user queried a known place / landmark
-    q_lower = query.lower()
+    from services.offline_geocoder import offline_geocoder
     target_loc = None
-    for kw, loc in KNOWN_GAZETTEER.items():
-        if kw in q_lower:
-            target_loc = loc
-            if aoi_bbox is None and shapely_poly is None:
-                delta = 0.35
-                aoi_bbox = (
-                    loc["lon"] - delta,
-                    loc["lat"] - delta,
-                    loc["lon"] + delta,
-                    loc["lat"] + delta,
-                )
-            break
+
+    # Check if a location name was extracted by the NLP/LLM filter
+    if parsed.spatial_relation and parsed.spatial_relation.target:
+        geo_res = offline_geocoder.geocode(parsed.spatial_relation.target)
+        if geo_res:
+            target_loc = geo_res
+
+    # If not found via filter extraction, try querying the raw text
+    if not target_loc:
+        geo_res = offline_geocoder.geocode(query)
+        if geo_res:
+            target_loc = geo_res
+
+    # Automatically center initial candidate bounding box on extracted location
+    effective_bbox = aoi_bbox
+    if effective_bbox is None and target_loc is not None:
+        if target_loc.get("bbox"):
+            tb = target_loc["bbox"]
+            effective_bbox = (tb[0] - 0.04, tb[1] - 0.04, tb[2] + 0.04, tb[3] + 0.04)
+        elif target_loc.get("lon") is not None and target_loc.get("lat") is not None:
+            t_lon, t_lat = target_loc["lon"], target_loc["lat"]
+            effective_bbox = (t_lon - 0.07, t_lat - 0.07, t_lon + 0.07, t_lat + 0.07)
 
     emb = embedding_service.embed_text(effective_query)
+    search_k = top_k * 4 if (shapely_poly is not None or target_loc is not None) else top_k
     hits = vector_store.search(
-        emb.vector, top_k=top_k * 2 if shapely_poly is not None else top_k,
+        emb.vector, top_k=search_k,
         sensor=sensor, date_from=date_from,
-        date_to=date_to, min_similarity=min_similarity, aoi_bbox=aoi_bbox,
+        date_to=date_to, min_similarity=min_similarity, aoi_bbox=effective_bbox,
     )
+    if len(hits) < 3 and effective_bbox is not None and aoi_bbox is None:
+        # Fallback to broader search if candidate window was too tight
+        hits = vector_store.search(
+            emb.vector, top_k=top_k * 4,
+            sensor=sensor, date_from=date_from,
+            date_to=date_to, min_similarity=min_similarity, aoi_bbox=None,
+        )
+
     with get_session() as session:
         results = _hits_to_results(
             hits,
@@ -221,6 +339,7 @@ def semantic_text_search(
             aoi_polygon=shapely_poly,
             spatial_relation=parsed.spatial_relation,
             max_cloud=parsed.max_cloud_cover,
+            query=effective_query,
         )
     return {
         "query": query,
@@ -276,4 +395,3 @@ def image_to_image_search(
         "results": results[:top_k],
         "has_polygon_filter": shapely_poly is not None,
     }
-
