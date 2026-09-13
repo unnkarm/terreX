@@ -120,23 +120,53 @@ def _difference_to_change_map(before_feat: np.ndarray, after_feat: np.ndarray) -
     """
     Swappable change detection head.
     Computes per-patch L2 feature distance, min-max normalized to 0..1.
+    Gracefully handles dimension and channel mismatches between feature maps.
     """
-    if before_feat.shape != after_feat.shape:
-        raise ValueError(
-            f"Change feature shapes do not match: before={before_feat.shape}, after={after_feat.shape}"
-        )
-    diff = np.linalg.norm(before_feat - after_feat, axis=-1)
+    bf = np.asarray(before_feat, dtype=np.float32)
+    af = np.asarray(after_feat, dtype=np.float32)
+
+    # 1. Ensure at least 3D [H, W, C]
+    if bf.ndim == 2:
+        bf = bf[:, :, None]
+    if af.ndim == 2:
+        af = af[:, :, None]
+
+    # 2. Align spatial grid dimensions [H, W]
+    if bf.shape[:2] != af.shape[:2]:
+        target_h = max(bf.shape[0], af.shape[0])
+        target_w = max(bf.shape[1], af.shape[1])
+        if bf.shape[:2] != (target_h, target_w):
+            bf_resized = []
+            for c in range(bf.shape[-1]):
+                img = Image.fromarray(bf[..., c]).resize((target_w, target_h), Image.Resampling.BILINEAR)
+                bf_resized.append(np.asarray(img, dtype=np.float32))
+            bf = np.stack(bf_resized, axis=-1)
+        if af.shape[:2] != (target_h, target_w):
+            af_resized = []
+            for c in range(af.shape[-1]):
+                img = Image.fromarray(af[..., c]).resize((target_w, target_h), Image.Resampling.BILINEAR)
+                af_resized.append(np.asarray(img, dtype=np.float32))
+            af = np.stack(af_resized, axis=-1)
+
+    # 3. Align channel dimensions
+    if bf.shape[-1] != af.shape[-1]:
+        bf_norm = bf / (np.linalg.norm(bf, axis=-1, keepdims=True) + 1e-8)
+        af_norm = af / (np.linalg.norm(af, axis=-1, keepdims=True) + 1e-8)
+        diff = np.abs(bf_norm.mean(axis=-1) - af_norm.mean(axis=-1))
+    else:
+        diff = np.linalg.norm(bf - af, axis=-1)
+
     lo, hi = diff.min(), diff.max()
     if hi - lo < 1e-8:
-        return np.zeros_like(diff)
-    return (diff - lo) / (hi - lo)
+        return np.zeros_like(diff, dtype=np.float32)
+    return ((diff - lo) / (hi - lo)).astype(np.float32)
 
 
 def _extract_prithvi_features(raster: np.ndarray, band_map: Optional[Dict[str, int]]):
     """Use Prithvi's six-band order when possible, otherwise RGB placeholder features."""
     chw = _prepare_prithvi_input(raster, band_map)
     if chw is None:
-        chw = np.transpose(raster[..., :3], (2, 0, 1))
+        chw = np.transpose(raster[..., :min(3, raster.shape[-1])], (2, 0, 1))
     return prithvi_service.extract(chw), chw
 
 
@@ -148,9 +178,10 @@ def _extract_pair_features(
 ):
     before_chw = _prepare_prithvi_input(before_raster, before_bmap)
     after_chw = _prepare_prithvi_input(after_raster, after_bmap)
-    if before_chw is None or after_chw is None:
-        before_chw = np.transpose(before_raster[..., :3], (2, 0, 1))
-        after_chw = np.transpose(after_raster[..., :3], (2, 0, 1))
+    if before_chw is None:
+        before_chw = np.transpose(before_raster[..., :min(3, before_raster.shape[-1])], (2, 0, 1))
+    if after_chw is None:
+        after_chw = np.transpose(after_raster[..., :min(3, after_raster.shape[-1])], (2, 0, 1))
     return prithvi_service.extract(before_chw), before_chw, prithvi_service.extract(after_chw), after_chw
 
 
@@ -332,8 +363,8 @@ def run_change_detection(
         change_prob_map = _difference_to_change_map(before_feat_map.array, after_feat_map.array)
         raw_change_score = float(change_prob_map.mean())
 
-        # Resize probability map to full tile resolution
-        h_orig, w_orig = before_tile.tile_size, before_tile.tile_size
+        # Resize probability map to actual raster resolution (handles edge tiles of size < 256)
+        h_orig, w_orig = before_raster.shape[0], before_raster.shape[1]
         if cv2 is not None:
             prob_map_full = cv2.resize(change_prob_map, (w_orig, h_orig), interpolation=cv2.INTER_LINEAR)
         else:
@@ -451,7 +482,12 @@ def run_change_detection(
         changed_pixels = int(change_mask_binary.sum())
         total_change_area_m2 = changed_pixels * (pixel_res ** 2)
 
-        method = "feature-diff-placeholder" if before_feat_map.is_placeholder else "prithvi-diff"
+        if before_feat_map.is_placeholder:
+            method = "feature-diff-placeholder"
+        elif before_feat_map.model_name == "prithvi-int8-onnx":
+            method = "prithvi-onnx-diff"
+        else:
+            method = "prithvi-diff"
 
         # Spectral deltas for Tier 1.4 Evidence Checklist
         d_ndvi_val = round(float(after_indices.ndvi.mean() - before_indices.ndvi.mean()), 4)

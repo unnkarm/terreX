@@ -54,6 +54,28 @@ def classify_change_regions(
         List of ChangeRegion instances with classification and rationale.
     """
     binary_mask = (change_mask > 0).astype(np.uint8)
+    th, tw = binary_mask.shape[:2]
+
+    def _align_2d(arr: np.ndarray) -> np.ndarray:
+        if arr.shape == (th, tw):
+            return arr
+        if cv2 is not None:
+            return cv2.resize(arr.astype(np.float32), (tw, th), interpolation=cv2.INTER_LINEAR)
+        from PIL import Image
+        return np.asarray(Image.fromarray(arr.astype(np.float32)).resize((tw, th), Image.Resampling.BILINEAR))
+
+    # Align before and after indices to mask dimensions
+    b_ndvi = _align_2d(before_indices.ndvi)
+    b_ndwi = _align_2d(before_indices.ndwi)
+    b_ndbi = _align_2d(before_indices.ndbi)
+    a_ndvi = _align_2d(after_indices.ndvi)
+    a_ndwi = _align_2d(after_indices.ndwi)
+    a_ndbi = _align_2d(after_indices.ndbi)
+
+    d_ndvi = a_ndvi - b_ndvi
+    d_ndwi = a_ndwi - b_ndwi
+    d_ndbi = a_ndbi - b_ndbi
+
     if cv2 is not None:
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_mask, connectivity=8)
     else:
@@ -61,11 +83,6 @@ def classify_change_regions(
         labels, num_features = label(binary_mask)
         num_labels = num_features + 1
         stats, centroids = None, None
-
-    deltas = compute_spectral_deltas(before_indices, after_indices)
-    d_ndvi = deltas["d_ndvi"]
-    d_ndwi = deltas["d_ndwi"]
-    d_ndbi = deltas["d_ndbi"]
 
     results: List[ChangeRegion] = []
 
@@ -94,9 +111,11 @@ def classify_change_regions(
         mean_ndvi = float(d_ndvi[region_mask].mean())
         mean_ndwi = float(d_ndwi[region_mask].mean())
         mean_ndbi = float(d_ndbi[region_mask].mean())
-        before_ndbi_mean = float(before_indices.ndbi[region_mask].mean())
-        after_ndbi_mean = float(after_indices.ndbi[region_mask].mean())
-        after_ndwi_mean = float(after_indices.ndwi[region_mask].mean())
+        before_ndbi_mean = float(b_ndbi[region_mask].mean())
+        after_ndbi_mean = float(a_ndbi[region_mask].mean())
+        after_ndwi_mean = float(a_ndwi[region_mask].mean())
+        before_ndvi_mean = float(b_ndvi[region_mask].mean())
+        after_ndvi_mean = float(a_ndvi[region_mask].mean())
 
         # Morphological analysis (elongation / aspect ratio)
         aspect = max(w / max(h, 1), h / max(w, 1))
@@ -127,7 +146,7 @@ def classify_change_regions(
             )
 
         # 2. Construction: strong built-up / SWIR increase, positive post-event NDBI
-        elif (mean_ndbi > 0.15) or (after_ndbi_mean > 0.0 and mean_ndbi > 0.04):
+        elif (mean_ndbi > 0.10) or (after_ndbi_mean > 0.0 and mean_ndbi > 0.04):
             change_type = "construction"
             dynamics = "appearance" if before_ndbi_mean < -0.05 else "expansion"
             conf = min(0.95, 0.65 + 0.4 * max(mean_ndbi, 0.0) + 0.3 * max(-mean_ndvi, 0.0))
@@ -136,31 +155,41 @@ def classify_change_regions(
                 f"with vegetation loss (dNDVI={mean_ndvi:+.2f}) indicates structural construction / built {dynamics}."
             )
 
-        # 3. Water-extent variation: strong shift in water index + water spectral signature (low SWIR/NDBI)
-        elif (abs(mean_ndwi) > 0.15 or after_ndwi_mean > 0.10) and (after_ndbi_mean <= 0.0 or mean_ndbi <= 0.0):
+        # 3. Vegetation Canopy Clearance (Deforestation / Loss)
+        elif mean_ndvi < -0.08:
+            change_type = "clearance"
+            dynamics = "disappearance" if mean_ndvi < -0.15 else "contraction"
+            conf = min(0.92, 0.65 + 0.5 * abs(mean_ndvi))
+            rationale = (
+                f"Vegetation reduction (dNDVI={mean_ndvi:+.2f}) without structural built-up response "
+                f"(post-event NDBI={after_ndbi_mean:+.2f}) indicates land clearance / defoliation."
+            )
+
+        # 4. Vegetation / Agricultural Cultivation Expansion
+        elif mean_ndvi > 0.12 and after_ndvi_mean > 0.15:
+            change_type = "clearance"
+            dynamics = "expansion"
+            conf = min(0.92, 0.65 + 0.3 * min(mean_ndvi, 1.0))
+            rationale = (
+                f"Significant vegetation / canopy index increase (dNDVI={mean_ndvi:+.2f}, post-event NDVI={after_ndvi_mean:.2f}) "
+                "indicates active agricultural cultivation or green canopy expansion."
+            )
+
+        # 5. Water-extent variation: strong shift in water index with low vegetation & low built-up signature
+        elif (abs(mean_ndwi) > 0.15 or after_ndwi_mean > 0.10) and (mean_ndvi < 0.20 and after_ndbi_mean <= 0.05):
             change_type = "water_extent"
             dynamics = "expansion" if mean_ndwi > 0 else "contraction"
             direction = "expansion" if mean_ndwi > 0 else "contraction/recession"
             conf = min(0.95, 0.70 + abs(mean_ndwi))
             rationale = (
-                f"Significant NDWI shift ({mean_ndwi:+.2f}) matches water body {direction}."
+                f"Significant NDWI shift ({mean_ndwi:+.2f}) with low vegetation/built signature matches water body {direction}."
             )
 
-        # 4. Clearance: vegetation loss without high built-up signature
-        elif mean_ndvi < -0.08:
-            change_type = "clearance"
-            dynamics = "disappearance" if mean_ndvi < -0.15 else "expansion"
-            conf = min(0.90, 0.60 + 0.5 * abs(mean_ndvi))
-            rationale = (
-                f"Vegetation reduction (dNDVI={mean_ndvi:+.2f}) without structural built-up response "
-                f"(post-event NDBI={after_ndbi_mean:+.2f}) indicates land clearance or vegetation {dynamics}."
-            )
-
-        # 5. Default / unclassified
+        # 6. Default / general ground change
         else:
             change_type = "unclassified"
             dynamics = "expansion" if mean_ndbi > 0 else "contraction"
-            conf = 0.50
+            conf = 0.60
             rationale = f"General ground spectral shift (dNDVI={mean_ndvi:+.2f}, dNDBI={mean_ndbi:+.2f})."
 
         results.append(

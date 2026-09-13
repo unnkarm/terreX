@@ -125,9 +125,29 @@ class _OnnxPrithvi:
     def __init__(self, weights_path: Path, config_path: Path):
         import onnxruntime as ort
 
+        # Silence ORT telemetry before ANY session is created.
+        # ORT ≥1.18 phones home on first InferenceSession() call unless disabled;
+        # in OFFLINE_MODE this causes a "wsarecv: connection forcibly closed" TCP
+        # reset against Google/Azure endpoints.  This call is idempotent.
+        try:
+            ort.disable_telemetry_events()
+        except Exception:
+            pass  # Older ORT builds that lack the API won't need it.
+
         with config_path.open(encoding="utf-8") as handle:
             config = json.load(handle)["pretrained_cfg"]
-        self.session = ort.InferenceSession(str(weights_path), providers=["CPUExecutionProvider"])
+
+        # Prefer CUDA if available, fall back to CPU cleanly.
+        # Explicitly exclude AzureExecutionProvider — it opened outbound
+        # network connections on ORT 1.23+ even in CPU-only deployments.
+        available = ort.get_available_providers()
+        providers = (
+            ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if "CUDAExecutionProvider" in available
+            else ["CPUExecutionProvider"]
+        )
+        self.session = ort.InferenceSession(str(weights_path), providers=providers)
+
         inputs = self.session.get_inputs()
         if len(inputs) != 1:
             raise RuntimeError(f"Expected one Prithvi ONNX input, found {len(inputs)}")
@@ -135,6 +155,15 @@ class _OnnxPrithvi:
         self.input_name = self.input.name
         self.mean = np.asarray(config["mean"], dtype=np.float32)[:, None, None]
         self.std = np.asarray(config["std"], dtype=np.float32)[:, None, None]
+
+        # Log shapes so startup logs confirm the model wired up correctly.
+        out_shapes = [(o.name, o.shape) for o in self.session.get_outputs()]
+        logger.info(
+            "Prithvi ONNX session ready — provider=%s  input=%s%s  outputs=%s",
+            self.session.get_providers()[0],
+            self.input_name, self.input.shape,
+            out_shapes,
+        )
 
     @staticmethod
     def _resize(image_chw: np.ndarray, height: int, width: int) -> np.ndarray:
@@ -272,15 +301,26 @@ class PrithviService:
 
     def extract(self, image_chw: np.ndarray) -> FeatureMap:
         image_chw = np.asarray(image_chw, dtype=np.float32)
-        if image_chw.shape[0] == 3 and (self._onnx is not None or self._real is not None):
-            # Synthesize standard 6 EO bands: blue, green, red, nir, swir1, swir2
-            r = image_chw[0]
-            g = image_chw[1]
-            b = image_chw[2]
-            nir = np.clip(1.2 * r - 0.2 * g, 0.0, 1.0)
-            swir1 = np.clip(0.9 * r, 0.0, 1.0)
-            swir2 = np.clip(0.8 * r, 0.0, 1.0)
-            image_chw = np.stack([b, g, r, nir, swir1, swir2], axis=0)
+        if (self._onnx is not None or self._real is not None):
+            if image_chw.shape[0] == 1:
+                # 1-band (e.g. SAR single polarization) -> replicate across 6 channels
+                v = image_chw[0]
+                image_chw = np.stack([v, v, v, v, v, v], axis=0)
+            elif image_chw.shape[0] == 2:
+                # 2-band (e.g. SAR VV/VH) -> replicate
+                vv, vh = image_chw[0], image_chw[1]
+                image_chw = np.stack([vv, vh, vv, vh, vv, vh], axis=0)
+            elif image_chw.shape[0] == 3:
+                # Synthesize standard 6 EO bands: blue, green, red, nir, swir1, swir2
+                r = image_chw[0]
+                g = image_chw[1]
+                b = image_chw[2]
+                nir = np.clip(1.2 * r - 0.2 * g, 0.0, 1.0)
+                swir1 = np.clip(0.9 * r, 0.0, 1.0)
+                swir2 = np.clip(0.8 * r, 0.0, 1.0)
+                image_chw = np.stack([b, g, r, nir, swir1, swir2], axis=0)
+            elif image_chw.shape[0] > 6:
+                image_chw = image_chw[:6]
 
         if self._onnx is not None and image_chw.shape[0] == 6:
             arr = self._onnx.extract(image_chw)
