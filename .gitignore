@@ -9,6 +9,7 @@ data/tiles/*
 !data/incoming/.gitkeep
 !data/scenes/.gitkeep
 !data/tiles/.gitkeep
+*.provenance.json
 models/remoteclip/*.pt
 models/prithvi/*.pt
 models/prithvi/*.json
@@ -19,3 +20,4 @@ frontend/powershell.cmd
 *.tsbuildinfo
 *.db
 *.onnx
+data/offline_basemap
