@@ -13,6 +13,8 @@ interface Props {
   activeMode?: SearchMode;
   loading?: boolean;
   parsedFilters?: ParsedFilters | null;
+  activeSensor?: string;
+  suggestions?: string[];
 }
 
 export default function SearchBar({
@@ -22,6 +24,8 @@ export default function SearchBar({
   activeMode,
   loading,
   parsedFilters,
+  activeSensor,
+  suggestions: customSuggestions,
 }: Props) {
   const [query, setQuery] = useState("");
   const [isFocused, setIsFocused] = useState(false);
@@ -30,13 +34,14 @@ export default function SearchBar({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentMode = activeMode ?? internalMode;
 
-  const suggestions = [
-    "New buildings near water in New Town, Kolkata",
-    "Dense urban development in Rajarhat Action Area",
-    "Urban expansion & roads in Bengaluru outskirts",
-    "Industrial development in Ahmedabad",
-    "Highways & construction along Yamuna corridor",
+  const defaultSuggestions = [
+    "water bodies and rivers",
+    "flooded agricultural land and terrain",
+    "new buildings and urban development",
+    "dense vegetation and forest cover",
+    "industrial infrastructure and roads",
   ];
+  const suggestions = customSuggestions && customSuggestions.length > 0 ? customSuggestions : defaultSuggestions;
 
   const handleRunQuery = (text: string) => {
     setQuery(text);
@@ -85,11 +90,11 @@ export default function SearchBar({
           {currentMode === "semantic" ? (
             <span>What are you <span className="text-neutral-400 font-light">looking for?</span></span>
           ) : (
-            <span>Upload reference <span className="text-neutral-400 font-light">optical chip</span></span>
+            <span>Upload reference <span className="text-neutral-400 font-light">optical / SAR chip</span></span>
           )}
         </span>
-        <span className="text-[9px] font-mono text-neutral-500 uppercase tracking-wider">
-          REMOTECLIP &middot; SENTINEL-2
+        <span className="text-[9px] font-mono text-cyan-400 font-semibold uppercase tracking-wider">
+          REMOTECLIP &middot; {activeSensor ? activeSensor.toUpperCase() : "ALL SENSORS"}
         </span>
       </div>
 
@@ -115,36 +120,7 @@ export default function SearchBar({
             </button>
           </div>
 
-          {/* Parsed Natural Language Intent Tags (Tier 1.2) */}
-          {parsedFilters && (parsedFilters.spatial_relation || parsedFilters.date_from || parsedFilters.date_to || parsedFilters.max_cloud_cover) && (
-            <div className="p-2 rounded bg-cyan-950/20 border border-cyan-800/40 space-y-1 font-mono text-[10px]">
-              <span className="text-[9px] uppercase tracking-wider text-cyan-400 font-bold block">
-                EXTRACTED QUERY CONSTRAINTS (GEO-SPATIAL + TEMPORAL):
-              </span>
-              <div className="flex flex-wrap gap-1.5">
-                {parsedFilters.spatial_relation && (
-                  <span className="px-2 py-0.5 rounded bg-cyan-900/40 border border-cyan-600/50 text-cyan-300">
-                    📍 {parsedFilters.spatial_relation.type} {parsedFilters.spatial_relation.distance_km}km of {parsedFilters.spatial_relation.resolved_name || parsedFilters.spatial_relation.target}
-                  </span>
-                )}
-                {parsedFilters.date_from && (
-                  <span className="px-2 py-0.5 rounded bg-emerald-900/40 border border-emerald-600/50 text-emerald-300">
-                    📅 ≥ {parsedFilters.date_from}
-                  </span>
-                )}
-                {parsedFilters.date_to && (
-                  <span className="px-2 py-0.5 rounded bg-emerald-900/40 border border-emerald-600/50 text-emerald-300">
-                    📅 ≤ {parsedFilters.date_to}
-                  </span>
-                )}
-                {parsedFilters.max_cloud_cover != null && (
-                  <span className="px-2 py-0.5 rounded bg-amber-900/40 border border-amber-600/50 text-amber-300">
-                    ☁️ cloud &lt; {Math.round(parsedFilters.max_cloud_cover * 100)}%
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
+
 
           {/* 1-Click Suggestions */}
           <div className="space-y-1">

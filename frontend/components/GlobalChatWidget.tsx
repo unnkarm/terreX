@@ -13,7 +13,7 @@ export default function GlobalChatWidget() {
           <div className="flex items-center justify-between p-3 border-b border-neutral-700 bg-neutral-800">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
-              <h3 className="text-xs uppercase tracking-widest text-emerald-400 font-bold">TerreX Assistant</h3>
+              <h3 className="text-xs uppercase tracking-widest text-emerald-400 font-bold">Terra Assistant</h3>
             </div>
           </div>
           <ChatPanel context={{}} />

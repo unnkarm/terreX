@@ -18,33 +18,94 @@ import {
 // MapLibre touches window at import time — load client-side only.
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
+interface TargetAoi {
+  id: string;
+  name: string;
+  coords: [number, number];
+  query: string;
+  sensor?: string;
+  bbox?: [number, number, number, number];
+}
+
 export default function WorkspacePage() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [selected, setSelected] = useState<SearchResult | null>(null);
-  const [filters, setFilters] = useState<FilterState>({ minSimilarity: 0, sensor: "Sentinel-2" });
+  const [filters, setFilters] = useState<FilterState>({ minSimilarity: 0 });
   const [loading, setLoading] = useState(false);
   const [placeholderWarning, setPlaceholderWarning] = useState(false);
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [hasData, setHasData] = useState<boolean | null>(null);
   const [sensors, setSensors] = useState<string[]>([]);
+  const [scenes, setScenes] = useState<any[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [isLeftOpen, setIsLeftOpen] = useState(true);
   const [isRightOpen, setIsRightOpen] = useState(true);
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [isDrawingAoi, setIsDrawingAoi] = useState(false);
 
-  const [customCenter, setCustomCenter] = useState<[number, number] | null>([88.2619, 22.5905]); // Default Kolkata AOI
+  const [customCenter, setCustomCenter] = useState<[number, number] | null>(null);
 
-  const INDIAN_LOCATIONS = useMemo(() => [
-    { id: "kolkata", name: "Kolkata (Hooghly Basin)", coords: [88.2619, 22.5905] as [number, number], query: "Urban infrastructure & waterways in Kolkata" },
-    { id: "delhi", name: "Delhi NCR (Yamuna)", coords: [77.2257, 28.5743] as [number, number], query: "River corridor and expanding built-up settlements" },
-    { id: "bengaluru", name: "Bengaluru (Outskirts)", coords: [77.6602, 12.8452] as [number, number], query: "Urban expansion & roads in Bengaluru outskirts" },
-    { id: "ahmedabad", name: "Ahmedabad (Sabarmati)", coords: [72.5714, 23.0225] as [number, number], query: "Industrial development in Ahmedabad" },
-    { id: "mumbai", name: "Mumbai (Coastal)", coords: [72.8777, 19.0760] as [number, number], query: "Dense coastal construction in Mumbai" },
-  ], []);
+  // Dynamically compute Target AOIs from currently ingested scenes in the database
+  const targetAois: TargetAoi[] = useMemo(() => {
+    if (!scenes || scenes.length === 0) {
+      return [
+        {
+          id: "default",
+          name: "All Ingested Regions",
+          coords: [88.4, 22.5],
+          query: "water bodies and terrain",
+          sensor: undefined,
+          bbox: undefined,
+        },
+      ];
+    }
+
+    return scenes.map((s, idx) => {
+      const bbox = s.provenance?.bounding_box;
+      const centerLon = bbox ? (bbox[0] + bbox[2]) / 2.0 : 88.4;
+      const centerLat = bbox ? (bbox[1] + bbox[3]) / 2.0 : 22.5;
+      const sensorLabel = s.sensor || "EO";
+      const sourceLabel = s.source_portal || s.underlying_dataset || "Ingested Scene";
+      const tileCount = s.tile_count ?? 0;
+
+      return {
+        id: s.scene_id || String(idx),
+        name: `${sensorLabel} (${tileCount} tiles · ${sourceLabel})`,
+        sensor: s.sensor,
+        coords: [centerLon, centerLat],
+        bbox: bbox as [number, number, number, number] | undefined,
+        query: sensorLabel.includes("SAR")
+          ? "water bodies and terrain"
+          : "urban structures and vegetation cover",
+      };
+    });
+  }, [scenes]);
+
+  // Dynamic search suggestions based on available sensors
+  const dynamicSuggestions = useMemo(() => {
+    const hasSar = sensors.some((s) => s.toLowerCase().includes("sar") || s.toLowerCase().includes("s1"));
+    const hasOptical = sensors.some((s) => s.toLowerCase().includes("sentinel-2") || s.toLowerCase().includes("landsat") || s.toLowerCase().includes("liss"));
+
+    const suggestions: string[] = [];
+    if (hasSar) {
+      suggestions.push("water bodies and rivers");
+      suggestions.push("flooded agricultural land");
+      suggestions.push("terrain roughness and wetlands");
+    }
+    if (hasOptical) {
+      suggestions.push("new buildings near water");
+      suggestions.push("dense urban expansion");
+      suggestions.push("vegetation and forest canopy");
+    }
+    if (suggestions.length === 0) {
+      suggestions.push("water bodies and rivers", "dense urban expansion", "agricultural land");
+    }
+    return suggestions;
+  }, [sensors]);
 
   const [parsedFilters, setParsedFilters] = useState<any>(null);
-  const [lastQuery, setLastQuery] = useState<string>("Sentinel-2 satellite observation");
+  const [lastQuery, setLastQuery] = useState<string>("water bodies and terrain");
 
   useEffect(() => {
     getSystemStatus()
@@ -58,14 +119,25 @@ export default function WorkspacePage() {
       });
 
     listScenes()
-      .then((scenes) => {
-        setSensors(Array.from(new Set(scenes.map((s: any) => s.sensor).filter(Boolean))));
-        if (scenes.length > 0) setHasData(true);
+      .then((loadedScenes) => {
+        setScenes(loadedScenes);
+        const uniqueSensors = Array.from(new Set(loadedScenes.map((s: any) => s.sensor).filter(Boolean)));
+        setSensors(uniqueSensors as string[]);
+        if (loadedScenes.length > 0) {
+          setHasData(true);
+          // Set initial map center to the first ingested scene's center
+          const firstBbox = loadedScenes[0]?.provenance?.bounding_box;
+          if (firstBbox) {
+            const cLon = (firstBbox[0] + firstBbox[2]) / 2.0;
+            const cLat = (firstBbox[1] + firstBbox[3]) / 2.0;
+            setCustomCenter([cLon, cLat]);
+          }
+        }
       })
       .catch(() => setSensors([]));
 
-    // Initial search automatically preloads all Sentinel observations
-    runTextSearch("Sentinel-2 satellite observation");
+    // Initial search automatically preloads all observations
+    runTextSearch("water bodies and terrain", { minSimilarity: 0 });
   }, []);
 
   const runTextSearch = useCallback(async (query: string, currentFilters?: FilterState) => {
@@ -82,7 +154,7 @@ export default function WorkspacePage() {
       }
       if (res.target_location) {
         setCustomCenter([res.target_location.lon, res.target_location.lat]);
-      } else if (res.results.length > 0) {
+      } else if (res.results.length > 0 && !customCenter) {
         setCustomCenter([res.results[0].lon, res.results[0].lat]);
       }
       if (res.results.length > 0) {
@@ -94,20 +166,23 @@ export default function WorkspacePage() {
     } finally {
       setLoading(false);
     }
-  }, [filters]);
+  }, [filters, customCenter]);
 
   const handleFindSimilar = useCallback(async (seed: SearchResult) => {
     setDiscoveryLoading(true);
     try {
       const discovery = await getDiscoveryClusters(seed.tile_id, seed.lon, seed.lat, 4, 20);
-      // Flatten all cluster sites into results queue (deduplicated by tile_id)
       const allSites = discovery.clusters.flatMap((c) => c.sites);
       const existingIds = new Set(results.map((r) => r.tile_id));
       const newSites = allSites.filter((s) => !existingIds.has(s.tile_id));
-      setResults((prev) => [...prev, ...newSites]);
-      // Show the first new site in the detail panel
       if (newSites.length > 0) {
+        setResults((prev) => [...newSites, ...prev]);
         setSelected(newSites[0]);
+        setCustomCenter([newSites[0].lon, newSites[0].lat]);
+        setIsRightOpen(true);
+      } else if (allSites.length > 0) {
+        setSelected(allSites[0]);
+        setCustomCenter([allSites[0].lon, allSites[0].lat]);
         setIsRightOpen(true);
       }
     } catch (err: any) {
@@ -134,51 +209,59 @@ export default function WorkspacePage() {
     }
   }, [filters]);
 
-  const handleSelectIndianLocation = useCallback((loc: typeof INDIAN_LOCATIONS[0]) => {
-    setCustomCenter(loc.coords);
-    const delta = 0.05;
-    const bbox: [number, number, number, number] = [
-      loc.coords[0] - delta,
-      loc.coords[1] - delta,
-      loc.coords[0] + delta,
-      loc.coords[1] + delta,
-    ];
-    const updated = { ...filters, bbox, polygon: undefined };
+  const handleSelectAoi = useCallback((aoi: typeof targetAois[0]) => {
+    setCustomCenter(aoi.coords);
+    let bbox = aoi.bbox;
+    if (!bbox) {
+      const delta = 0.1;
+      bbox = [aoi.coords[0] - delta, aoi.coords[1] - delta, aoi.coords[0] + delta, aoi.coords[1] + delta];
+    }
+    const updated = { ...filters, bbox, polygon: undefined, sensor: aoi.sensor || undefined };
     setFilters(updated);
-    runTextSearch(loc.query, updated);
+    runTextSearch(aoi.query, updated);
   }, [filters, runTextSearch]);
 
   const handleAoiDrawn = useCallback((bbox: [number, number, number, number]) => {
+    setIsDrawingAoi(false);
     const updated = { ...filters, bbox, polygon: undefined };
     setFilters(updated);
     runTextSearch(lastQuery, updated);
   }, [filters, lastQuery, runTextSearch]);
 
   const handleAoiPolygonDrawn = useCallback((polygonGeoJson: { type: "Polygon"; coordinates: number[][][] }) => {
+    setIsDrawingAoi(false);
     const updated = { ...filters, polygon: polygonGeoJson, bbox: undefined };
     setFilters(updated);
     runTextSearch(lastQuery, updated);
   }, [filters, lastQuery, runTextSearch]);
 
   const handleClearBbox = useCallback(() => {
+    setIsDrawingAoi(false);
     const updated = { ...filters, bbox: undefined, polygon: undefined };
     setFilters(updated);
     runTextSearch(lastQuery, updated);
   }, [filters, lastQuery, runTextSearch]);
 
-  // customCenter takes priority: set explicitly by search/gazetteer/AOI buttons.
-  // When user clicks a tile, we also update customCenter to that tile's location.
   const center: [number, number] = useMemo(() => {
     if (customCenter) return customCenter;
     if (results.length > 0) return [results[0].lon, results[0].lat];
-    return [88.2619, 22.5905]; // Kolkata New Town default
-  }, [customCenter, results]);
+    if (scenes.length > 0 && scenes[0]?.provenance?.bounding_box) {
+      const b = scenes[0].provenance.bounding_box;
+      return [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
+    }
+    return [88.4, 22.5];
+  }, [customCenter, results, scenes]);
 
-  const currentSelectedLoc = useMemo(() => {
-    return INDIAN_LOCATIONS.find(
-      (loc) => Math.abs(center[0] - loc.coords[0]) < 0.08 && Math.abs(center[1] - loc.coords[1]) < 0.08
+  const currentSelectedAoi = useMemo(() => {
+    return targetAois.find(
+      (loc) => Math.abs(center[0] - loc.coords[0]) < 0.15 && Math.abs(center[1] - loc.coords[1]) < 0.15
     );
-  }, [INDIAN_LOCATIONS, center]);
+  }, [targetAois, center]);
+
+  const activePortalSources = useMemo(() => {
+    const portals = Array.from(new Set(scenes.map((s) => s.source_portal).filter(Boolean)));
+    return portals.length > 0 ? portals.join(" · ") : "COPERNICUS · USGS · ISRO BHUVAN";
+  }, [scenes]);
 
   return (
     <main className="h-screen w-screen flex flex-col bg-black font-sans relative overflow-hidden select-none">
@@ -204,63 +287,73 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {/* Geospatial Intelligence Telemetry Bar */}
-      <div className="w-full bg-neutral-950/90 border-b border-neutral-800/80 px-6 py-2 flex items-center justify-between z-40">
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] font-mono text-radar font-semibold uppercase tracking-widest flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-radar animate-pulse" />
-            INDIAN EO PIPELINE:
-          </span>
-          <span className="px-2 py-0.5 rounded bg-neutral-900 border border-neutral-700 text-cyan-400 font-mono text-[10px] font-bold">
-            SENTINEL-2 + ISRO BHUVAN / MOSDAC
-          </span>
-          <span className="hidden md:inline-block text-[10px] text-neutral-500 font-mono">
-            &middot; EPSG:32645 (UTM 45N)
-          </span>
-        </div>
+      {/* Unified Compact Telemetry & AOI Control Bar */}
+      <div className="w-full bg-black/95 border-b border-neutral-800/80 backdrop-blur-md px-4 py-1.5 flex items-center justify-between gap-3 text-xs z-40 font-mono select-none">
+        {/* Left: Active Pipeline & Target AOI Selector */}
+        <div className="flex items-center gap-3 min-w-0 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
+            <span className="text-emerald-400 font-bold text-[10px] tracking-wider uppercase">ACTIVE EO PIPELINE:</span>
+            <span className="px-2 py-0.5 rounded bg-neutral-900 border border-neutral-700 text-cyan-400 font-mono text-[10px] font-bold">
+              {sensors.length > 0 ? sensors.join(" + ") : "SAR-C + MSI"}
+            </span>
+          </div>
 
-        <div className="flex items-center gap-4 text-[10px] font-mono text-neutral-400">
-          <span>COORDINATES: <strong className="text-white">{center[1].toFixed(4)}°N, {center[0].toFixed(4)}°E</strong></span>
-          <span className="hidden sm:inline-block">CANDIDATES: <strong className="text-emerald-400">{results.length}</strong></span>
-        </div>
-      </div>
+          <div className="h-3.5 w-px bg-neutral-800 hidden sm:block" />
 
-      {/* Indian AOI Location Fast Selector */}
-      <div className="w-full bg-black/95 border-b border-neutral-800/80 px-6 py-1.5 flex items-center justify-between gap-3 text-[10px] font-mono z-40">
-        <div className="flex items-center gap-2.5 flex-shrink-0">
-          <label htmlFor="target-aoi-select" className="text-neutral-400 uppercase tracking-wider font-bold flex items-center gap-1.5 cursor-pointer">
-            <span className="text-amber-500">🇮🇳</span> TARGET AOI:
-          </label>
-          <div className="relative inline-flex items-center">
-            <select
-              id="target-aoi-select"
-              value={currentSelectedLoc?.id ?? ""}
-              onChange={(e) => {
-                const loc = INDIAN_LOCATIONS.find((l) => l.id === e.target.value);
-                if (loc) {
-                  handleSelectIndianLocation(loc);
-                }
-              }}
-              className="bg-neutral-900 border border-neutral-700 hover:border-amber-500/80 focus:border-amber-500 text-amber-300 font-semibold px-3 py-1 pr-8 rounded text-[10px] uppercase tracking-wider cursor-pointer outline-none appearance-none transition-all shadow-sm"
-            >
-              <option value="" disabled className="bg-neutral-950 text-neutral-500">
-                SELECT TARGET AOI
-              </option>
-              {INDIAN_LOCATIONS.map((loc) => (
-                <option key={loc.id} value={loc.id} className="bg-neutral-950 text-neutral-200 py-1 font-mono">
-                  {loc.name}
+          {/* Target AOI Dropdown */}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <label htmlFor="target-aoi-select" className="text-amber-400 font-bold text-[10px] tracking-wider uppercase flex items-center gap-1 cursor-pointer">
+              <span>TARGET AOI:</span>
+            </label>
+            <div className="relative inline-flex items-center">
+              <select
+                id="target-aoi-select"
+                value={currentSelectedAoi?.id ?? ""}
+                onChange={(e) => {
+                  const aoi = targetAois.find((l) => l.id === e.target.value);
+                  if (aoi) {
+                    handleSelectAoi(aoi);
+                  }
+                }}
+                className="bg-neutral-900 border border-neutral-700 hover:border-amber-500/80 focus:border-amber-500 text-amber-300 font-mono font-bold px-2.5 py-0.5 pr-7 rounded text-[10px] uppercase tracking-wider cursor-pointer outline-none appearance-none transition-all shadow-sm max-w-[280px] truncate"
+              >
+                <option value="" disabled className="bg-neutral-950 text-neutral-500">
+                  SELECT TARGET AOI / SCENE
                 </option>
-              ))}
-            </select>
-            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-amber-400">
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
+                {targetAois.map((aoi) => (
+                  <option key={aoi.id} value={aoi.id} className="bg-neutral-950 text-neutral-200 py-1 font-mono">
+                    {aoi.name}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-amber-400">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
             </div>
           </div>
         </div>
-        <div className="hidden lg:flex items-center gap-2 text-neutral-500 text-[9px]">
-          <span>INDIAN EO INTEGRATION: BHUVAN LISS-III &middot; MOSDAC API &middot; SENTINEL-2 L2A</span>
+
+        {/* Right: Coordinates & Telemetry Stats */}
+        <div className="flex items-center gap-3 text-[10px] font-mono tracking-wider uppercase text-neutral-400 flex-shrink-0">
+          <div className="hidden md:flex items-center gap-2">
+            <span className="text-amber-400/90 font-medium">
+              &middot; {scenes.length} SCENES LOADED
+            </span>
+            <div className="h-3 w-px bg-neutral-800" />
+            <span className="text-neutral-400">
+              CANDIDATES: <span className="font-bold text-emerald-400">{results.length}</span>
+            </span>
+          </div>
+
+          <div className="h-3.5 w-px bg-neutral-800 hidden md:block" />
+
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-neutral-300">
+            <span className="text-neutral-500">COORDINATES:</span>
+            <span className="font-bold text-white">{center[1].toFixed(4)}°N, {center[0].toFixed(4)}°E</span>
+          </div>
         </div>
       </div>
 
@@ -280,14 +373,19 @@ export default function WorkspacePage() {
               onImageSearch={runImageSearch}
               loading={loading}
               parsedFilters={parsedFilters}
+              activeSensor={filters.sensor}
+              suggestions={dynamicSuggestions}
             />
 
             {/* 2. Multi-Dimensional Filter Bar (AOI, Temporal, Cloud) */}
             <FilterBar
               filters={filters}
-              onChange={setFilters}
+              onChange={(f) => {
+                setFilters(f);
+                runTextSearch(lastQuery, f);
+              }}
               sensors={sensors}
-              onTriggerDrawBbox={() => {}}
+              onTriggerDrawBbox={() => setIsDrawingAoi((prev) => !prev)}
               onClearBbox={handleClearBbox}
             />
 
@@ -340,6 +438,10 @@ export default function WorkspacePage() {
               setIsRightOpen(true);
             }}
             center={center}
+            activeBbox={filters.bbox}
+            activePolygon={filters.polygon}
+            isDrawingAoi={isDrawingAoi}
+            onDrawModeChange={(mode) => setIsDrawingAoi(mode === "box")}
             onAoiDrawn={handleAoiDrawn}
             onAoiPolygonDrawn={handleAoiPolygonDrawn}
           />
@@ -350,18 +452,18 @@ export default function WorkspacePage() {
           <button
             onClick={() => setIsRightOpen(!isRightOpen)}
             className="absolute top-1/2 -translate-y-1/2 z-40 w-5 h-12 bg-neutral-900 border border-r-0 border-neutral-800 rounded-l flex items-center justify-center text-neutral-400 hover:text-white transition-all shadow-md"
-            style={{ right: isRightOpen ? "420px" : "0px" }}
+            style={{ right: isRightOpen ? "490px" : "0px" }}
             title={isRightOpen ? "Collapse Inspection Panel" : "Expand Inspection Panel"}
           >
             <span className="text-[10px] font-mono">{isRightOpen ? "›" : "‹"}</span>
           </button>
         )}
 
-        {/* RIGHT COLUMN: Site Inspection & Verification Panel (420px) */}
+        {/* RIGHT COLUMN: Site Inspection & Verification Panel (490px) */}
         {selected && (
           <div
             className={`flex-shrink-0 h-full border-l border-neutral-800/80 bg-neutral-950/95 flex flex-col z-30 overflow-hidden transition-[width,transform] duration-300 ${
-              isRightOpen ? "w-[420px] translate-x-0" : "w-0 translate-x-full border-l-0"
+              isRightOpen ? "w-[490px] translate-x-0" : "w-0 translate-x-full border-l-0"
             }`}
           >
             <ResultDetail
@@ -386,13 +488,12 @@ export default function WorkspacePage() {
       </div>
 
       {/* Export Modal */}
-      {selected && (
-        <ExportModal
-          result={selected}
-          isOpen={isExportOpen}
-          onClose={() => setIsExportOpen(false)}
-        />
-      )}
+      <ExportModal
+        result={selected}
+        allResults={results}
+        isOpen={isExportOpen}
+        onClose={() => setIsExportOpen(false)}
+      />
     </main>
   );
 }

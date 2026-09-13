@@ -59,7 +59,7 @@ export default function ResultsList({
           const simPct = Math.round(r.similarity_score * 100);
           const qualityPct = Math.round((r.quality_score ?? 0.94) * 100);
           const cloudPct = Math.round((r.cloud_fraction ?? 0.03) * 100);
-          const title = r.classification_label ?? "NEW STRUCTURES";
+          const title = r.classification_label || (r.location_name ? `${r.location_name.toUpperCase()} REGION` : "CANDIDATE TARGET");
           const sub = r.location_name ?? r.scene_id;
           const thumb = r.thumbnail_path
             ? thumbnailUrl(r.thumbnail_path)

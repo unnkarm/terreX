@@ -51,10 +51,6 @@ export default function TopNav({ status, onExportClick }: TopNavProps) {
 
       {/* Telemetry Status Bar & Actions */}
       <div className="flex items-center gap-4 text-[10px] font-mono tracking-widest text-neutral-400 uppercase">
-        <span className="hidden xl:inline-block text-[9px] px-2.5 py-1 rounded border border-neutral-800 text-neutral-300 bg-neutral-950 font-mono">
-          AIR-GAPPED &middot; SENTINEL-2 &middot; EPSG:32645
-        </span>
-
         {/* Model Status Pills */}
         <div className="hidden md:flex items-center gap-2 font-mono">
           <span className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
@@ -73,10 +69,10 @@ export default function TopNav({ status, onExportClick }: TopNavProps) {
           </span>
           <span className={`flex items-center gap-1.5 px-2 py-0.5 rounded border text-[10px] transition-colors ml-1 ${
             status?.offline_mode !== false
-              ? "border-cyan-900/40 text-cyan-400 bg-cyan-950/20"
+              ? "border-emerald-900/40 text-emerald-400 bg-emerald-950/20"
               : "border-neutral-800 text-neutral-500 bg-neutral-950"
           }`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${status?.offline_mode !== false ? 'bg-cyan-400 shadow-[0_0_8px_#06b6d4] animate-pulse' : 'bg-neutral-600'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${status?.offline_mode !== false ? 'bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse' : 'bg-neutral-600'}`} />
             OFFLINE {status?.offline_mode !== false ? "✓" : "✗"}
           </span>
         </div>
@@ -85,13 +81,11 @@ export default function TopNav({ status, onExportClick }: TopNavProps) {
         {onExportClick && (
           <button
             onClick={onExportClick}
-            className="px-3.5 py-1.5 rounded border border-neutral-700 text-neutral-300 hover:border-cyan-500 hover:text-cyan-400 transition-all bg-neutral-950/80 font-sans font-semibold text-xs tracking-widest uppercase"
+            className="px-3.5 py-1.5 rounded border border-neutral-700 text-neutral-300 hover:border-emerald-500 hover:text-emerald-400 transition-all bg-neutral-950/80 font-sans font-semibold text-xs tracking-widest uppercase"
           >
             EXPORT
           </button>
         )}
-
-        
       </div>
     </header>
   );

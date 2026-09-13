@@ -83,21 +83,33 @@ export default function FilterBar({
         <div className="pt-2 border-t border-neutral-800/80 space-y-3 font-sans">
           {/* Temporal Range */}
           <div className="space-y-1">
-            <span className="font-mono text-[9px] uppercase tracking-wider text-neutral-500 block">
-              TEMPORAL ACQUISITION RANGE
-            </span>
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[9px] uppercase tracking-wider text-neutral-500 block">
+                TEMPORAL ACQUISITION RANGE
+              </span>
+              {(filters.dateFrom || filters.dateTo) && (
+                <button
+                  onClick={() => onChange({ ...filters, dateFrom: undefined, dateTo: undefined })}
+                  className="text-[9px] font-mono text-red-400 hover:text-red-300 uppercase tracking-wider"
+                >
+                  ✕ Clear Dates
+                </button>
+              )}
+            </div>
             <div className="flex items-center gap-2 font-mono text-[10px]">
               <input
                 type="date"
-                value={filters.dateFrom ?? "2023-01-01"}
-                onChange={(e) => onChange({ ...filters, dateFrom: e.target.value })}
+                value={filters.dateFrom ?? ""}
+                placeholder="From"
+                onChange={(e) => onChange({ ...filters, dateFrom: e.target.value || undefined })}
                 className="bg-black border border-neutral-800 focus:border-neutral-600 rounded px-2 py-1 text-neutral-300 flex-1 outline-none text-[10px]"
               />
               <span className="text-neutral-600">→</span>
               <input
                 type="date"
-                value={filters.dateTo ?? "2026-09-01"}
-                onChange={(e) => onChange({ ...filters, dateTo: e.target.value })}
+                value={filters.dateTo ?? ""}
+                placeholder="To"
+                onChange={(e) => onChange({ ...filters, dateTo: e.target.value || undefined })}
                 className="bg-black border border-neutral-800 focus:border-neutral-600 rounded px-2 py-1 text-neutral-300 flex-1 outline-none text-[10px]"
               />
             </div>
@@ -108,15 +120,20 @@ export default function FilterBar({
             <div>
               <div className="flex justify-between text-[10px] font-mono text-neutral-400 mb-1">
                 <span>MAX CLOUD</span>
-                <span className="text-cyan-400 font-bold">{Math.round((filters.maxCloudCover ?? 0.3) * 100)}%</span>
+                <span className="text-cyan-400 font-bold">
+                  {filters.maxCloudCover !== undefined ? `${Math.round(filters.maxCloudCover * 100)}%` : "ALL"}
+                </span>
               </div>
               <input
                 type="range"
                 min={0}
                 max={1}
                 step={0.05}
-                value={filters.maxCloudCover ?? 0.3}
-                onChange={(e) => onChange({ ...filters, maxCloudCover: parseFloat(e.target.value) })}
+                value={filters.maxCloudCover ?? 1.0}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  onChange({ ...filters, maxCloudCover: val >= 1.0 ? undefined : val });
+                }}
                 className="w-full accent-cyan-400 h-1 bg-neutral-800 rounded appearance-none cursor-pointer"
               />
             </div>

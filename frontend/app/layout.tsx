@@ -15,9 +15,6 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark scroll-smooth">
-      <head>
-        <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-      </head>
       <body className="bg-black text-white antialiased selection:bg-white selection:text-black">
         {children}
       </body>

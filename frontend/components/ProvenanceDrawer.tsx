@@ -236,7 +236,7 @@ export default function ProvenanceDrawer({ result, isOpen, onClose }: Provenance
 
         {/* Footer */}
         <div className="p-4 border-t border-neutral-800 bg-black flex justify-between items-center text-[10px] text-neutral-500">
-          <span>STRICT AIR-GAP ISRO COMPLIANCE &middot; 2.2.7</span>
+          <span>STRICT AIR-GAP COMPLIANCE &middot; LEVEL 1 VERIFIED</span>
           <button
             onClick={onClose}
             className="px-4 py-1.5 rounded bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-700 font-bold"

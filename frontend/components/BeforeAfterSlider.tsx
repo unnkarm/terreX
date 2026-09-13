@@ -12,6 +12,7 @@ interface BeforeAfterSliderProps {
   dominantChange?: string | null;
   confidence?: number | null;
   isFallback?: boolean;
+  activeLayers?: Record<string, boolean>;
 }
 
 type ViewMode = "SPLIT" | "BEFORE" | "AFTER" | "MASK" | "BLEND";
@@ -25,6 +26,7 @@ export default function BeforeAfterSlider({
   dominantChange = null,
   confidence = null,
   isFallback = false,
+  activeLayers,
 }: BeforeAfterSliderProps) {
   const [sliderPos, setSliderPos] = useState(50); // percentage 0 - 100
   const [mode, setMode] = useState<ViewMode>("SPLIT");
@@ -36,6 +38,19 @@ export default function BeforeAfterSlider({
 
   const bUrl = beforeImg ? thumbnailUrl(beforeImg) : fallbackBefore;
   const aUrl = afterImg ? thumbnailUrl(afterImg) : fallbackAfter;
+
+  // Resolve spectral layer visual filters based on active layer toggles
+  const isMaskActive = activeLayers ? activeLayers.MASK : true;
+  let spectralFilter = "";
+  if (activeLayers?.NDVI) {
+    spectralFilter = "hue-rotate(70deg) saturate(2.2) contrast(1.15)";
+  } else if (activeLayers?.NDWI) {
+    spectralFilter = "hue-rotate(165deg) saturate(2.4) contrast(1.2)";
+  } else if (activeLayers?.NDBI) {
+    spectralFilter = "sepia(0.7) hue-rotate(-25deg) saturate(2.2) contrast(1.25)";
+  } else if (activeLayers?.CONFIDENCE) {
+    spectralFilter = "contrast(1.5) brightness(1.15)";
+  }
 
   // Resolve the mask image URL — it's served directly from the backend /static/ endpoint
   const resolvedMaskUrl = maskImg
@@ -111,7 +126,8 @@ export default function BeforeAfterSlider({
         <img
           src={aUrl}
           alt="After Observation"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ${mode === "BEFORE" ? "opacity-0" : "opacity-100"
+          style={{ filter: spectralFilter || undefined }}
+          className={`absolute inset-0 w-full h-full object-cover transition-all duration-200 ${mode === "BEFORE" ? "opacity-0" : "opacity-100"
             }`}
         />
 
@@ -129,6 +145,7 @@ export default function BeforeAfterSlider({
               style={{
                 width: containerRef.current ? `${containerRef.current.clientWidth}px` : "100%",
                 height: "100%",
+                filter: spectralFilter || undefined,
               }}
             />
           </div>
@@ -137,7 +154,12 @@ export default function BeforeAfterSlider({
         {/* BEFORE MODE EXCLUSIVE */}
         {mode === "BEFORE" && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={bUrl} alt="Before Observation" className="absolute inset-0 w-full h-full object-cover" />
+          <img
+            src={bUrl}
+            alt="Before Observation"
+            style={{ filter: spectralFilter || undefined }}
+            className="absolute inset-0 w-full h-full object-cover"
+          />
         )}
 
         {/* BLEND MODE */}
@@ -146,12 +168,13 @@ export default function BeforeAfterSlider({
           <img
             src={bUrl}
             alt="Before Observation Blend"
+            style={{ filter: spectralFilter || undefined }}
             className="absolute inset-0 w-full h-full object-cover opacity-50 mix-blend-difference"
           />
         )}
 
         {/* CHANGE MASK HEATMAP OVERLAY — real PNG from backend or fallback gradient */}
-        {(mode === "MASK" || mode === "SPLIT") && (
+        {isMaskActive && (mode === "MASK" || mode === "SPLIT") && (
           <div
             className={`absolute inset-0 pointer-events-none transition-opacity ${mode === "MASK" ? "opacity-95" : "opacity-40"
               }`}
