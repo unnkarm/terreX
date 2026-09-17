@@ -94,10 +94,6 @@ def _prepare_prithvi_input(raster: np.ndarray, band_map: Optional[Dict[str, int]
     bands = [raster[..., band_map[name]] for name in required]
     if "swir2" in band_map and band_map["swir2"] < raster.shape[-1]:
         bands.append(raster[..., band_map["swir2"]])
-    elif raster.shape[-1] >= 6:
-        # If SWIR2 is unmapped (e.g. S2 L2A tile packed as scl at index 5 or 6), use 6th channel
-        idx = band_map.get("scl", 5)
-        bands.append(raster[..., idx if idx < raster.shape[-1] else 5])
     else:
         return None
 
@@ -156,10 +152,13 @@ def _difference_to_change_map(before_feat: np.ndarray, after_feat: np.ndarray) -
     else:
         diff = np.linalg.norm(bf - af, axis=-1)
 
-    lo, hi = diff.min(), diff.max()
-    if hi - lo < 1e-8:
-        return np.zeros_like(diff, dtype=np.float32)
-    return ((diff - lo) / (hi - lo)).astype(np.float32)
+    # Normalize by the local feature magnitude rather than stretching every
+    # pair to 0..1.  Pair-wise min/max scaling makes harmless noise look like a
+    # full-strength change and prevents a stable threshold across a time series.
+    magnitude = np.linalg.norm(bf, axis=-1) + np.linalg.norm(af, axis=-1) + 1e-6
+    if bf.shape[-1] != af.shape[-1]:
+        magnitude = np.abs(bf_norm.mean(axis=-1)) + np.abs(af_norm.mean(axis=-1)) + 1e-6
+    return np.clip(diff / magnitude, 0.0, 1.0).astype(np.float32)
 
 
 def _extract_prithvi_features(raster: np.ndarray, band_map: Optional[Dict[str, int]]):

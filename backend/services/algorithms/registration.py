@@ -56,6 +56,42 @@ def compute_correlation(a: np.ndarray, b: np.ndarray) -> float:
     return max(-1.0, min(1.0, corr))
 
 
+def _phase_registration(
+    gray_ref: np.ndarray,
+    gray_tgt: np.ndarray,
+    after_img: np.ndarray,
+    corr_before: float,
+) -> Optional[RegistrationResult]:
+    """Apply the measured FFT translation, choosing its verified sign by correlation."""
+    h, w = gray_ref.shape[:2]
+    (shift_x, shift_y), response = cv2.phaseCorrelate(
+        gray_ref.astype(np.float64), gray_tgt.astype(np.float64)
+    )
+    if abs(shift_x) >= (w * 0.25) or abs(shift_y) >= (h * 0.25):
+        return None
+
+    candidates = []
+    for dx, dy in ((-shift_x, -shift_y), (shift_x, shift_y)):
+        matrix = np.float32([[1.0, 0.0, dx], [0.0, 1.0, dy]])
+        aligned = cv2.warpAffine(
+            after_img, matrix, (w, h), flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT_101,
+        )
+        correlation = compute_correlation(gray_ref, _to_gray_uint8(aligned))
+        candidates.append((correlation, aligned, matrix, float(dx), float(dy)))
+    corr_after, aligned_after, matrix, dx, dy = max(candidates, key=lambda item: item[0])
+    return RegistrationResult(
+        aligned_after=aligned_after,
+        transform_matrix=matrix,
+        inliers=0,
+        correlation_before=corr_before,
+        correlation_after=corr_after,
+        is_aligned=bool(response > 0.05 and corr_after >= corr_before),
+        dx=dx,
+        dy=dy,
+    )
+
+
 def register_image_pair(
     before_img: np.ndarray,
     after_img: np.ndarray,
@@ -85,10 +121,10 @@ def register_image_pair(
         return RegistrationResult(
             aligned_after=after_img.copy(),
             transform_matrix=None,
-            inliers=12,
+            inliers=0,
             correlation_before=corr_before,
             correlation_after=corr_before,
-            is_aligned=True,
+            is_aligned=False,
         )
 
     # 1. Feature detection via ORB
@@ -98,20 +134,9 @@ def register_image_pair(
 
     if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
         # Fallback: Sub-Pixel FFT Phase Correlation
-        (fft_dx, fft_dy), response = cv2.phaseCorrelate(gray_ref.astype(np.float64), gray_tgt.astype(np.float64))
-        if abs(fft_dx) < (w * 0.25) and abs(fft_dy) < (h * 0.25):
-            fft_matrix = np.float32([[1.0, 0.0, fft_dx], [0.0, 1.0, fft_dy]])
-            aligned_after = cv2.warpAffine(after_img, fft_matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
-            return RegistrationResult(
-                aligned_after=aligned_after,
-                transform_matrix=fft_matrix,
-                inliers=32,
-                correlation_before=max(corr_before, 0.85),
-                correlation_after=max(corr_before, 0.94),
-                is_aligned=True,
-                dx=float(fft_dx),
-                dy=float(fft_dy),
-            )
+        phase = _phase_registration(gray_ref, gray_tgt, after_img, corr_before)
+        if phase is not None:
+            return phase
         return RegistrationResult(
             aligned_after=after_img.copy(),
             transform_matrix=None,
@@ -135,20 +160,9 @@ def register_image_pair(
 
     if len(good_matches) < min_inliers:
         # Fallback: Sub-Pixel FFT Phase Correlation
-        (fft_dx, fft_dy), response = cv2.phaseCorrelate(gray_ref.astype(np.float64), gray_tgt.astype(np.float64))
-        if abs(fft_dx) < (w * 0.25) and abs(fft_dy) < (h * 0.25):
-            fft_matrix = np.float32([[1.0, 0.0, fft_dx], [0.0, 1.0, fft_dy]])
-            aligned_after = cv2.warpAffine(after_img, fft_matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
-            return RegistrationResult(
-                aligned_after=aligned_after,
-                transform_matrix=fft_matrix,
-                inliers=max(len(good_matches), 32),
-                correlation_before=max(corr_before, 0.85),
-                correlation_after=max(corr_before, 0.94),
-                is_aligned=True,
-                dx=float(fft_dx),
-                dy=float(fft_dy),
-            )
+        phase = _phase_registration(gray_ref, gray_tgt, after_img, corr_before)
+        if phase is not None:
+            return phase
         return RegistrationResult(
             aligned_after=after_img.copy(),
             transform_matrix=None,
@@ -166,20 +180,9 @@ def register_image_pair(
     inliers = int(mask.sum()) if mask is not None else 0
 
     if matrix is None or inliers < min_inliers:
-        (fft_dx, fft_dy), response = cv2.phaseCorrelate(gray_ref.astype(np.float64), gray_tgt.astype(np.float64))
-        if abs(fft_dx) < (w * 0.25) and abs(fft_dy) < (h * 0.25):
-            fft_matrix = np.float32([[1.0, 0.0, fft_dx], [0.0, 1.0, fft_dy]])
-            aligned_after = cv2.warpAffine(after_img, fft_matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
-            return RegistrationResult(
-                aligned_after=aligned_after,
-                transform_matrix=fft_matrix,
-                inliers=32,
-                correlation_before=max(corr_before, 0.85),
-                correlation_after=max(corr_before, 0.94),
-                is_aligned=True,
-                dx=float(fft_dx),
-                dy=float(fft_dy),
-            )
+        phase = _phase_registration(gray_ref, gray_tgt, after_img, corr_before)
+        if phase is not None:
+            return phase
         return RegistrationResult(
             aligned_after=after_img.copy(),
             transform_matrix=None,
