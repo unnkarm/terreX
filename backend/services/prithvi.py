@@ -301,27 +301,9 @@ class PrithviService:
 
     def extract(self, image_chw: np.ndarray) -> FeatureMap:
         image_chw = np.asarray(image_chw, dtype=np.float32)
-        if (self._onnx is not None or self._real is not None):
-            if image_chw.shape[0] == 1:
-                # 1-band (e.g. SAR single polarization) -> replicate across 6 channels
-                v = image_chw[0]
-                image_chw = np.stack([v, v, v, v, v, v], axis=0)
-            elif image_chw.shape[0] == 2:
-                # 2-band (e.g. SAR VV/VH) -> replicate
-                vv, vh = image_chw[0], image_chw[1]
-                image_chw = np.stack([vv, vh, vv, vh, vv, vh], axis=0)
-            elif image_chw.shape[0] == 3:
-                # Synthesize standard 6 EO bands: blue, green, red, nir, swir1, swir2
-                r = image_chw[0]
-                g = image_chw[1]
-                b = image_chw[2]
-                nir = np.clip(1.2 * r - 0.2 * g, 0.0, 1.0)
-                swir1 = np.clip(0.9 * r, 0.0, 1.0)
-                swir2 = np.clip(0.8 * r, 0.0, 1.0)
-                image_chw = np.stack([b, g, r, nir, swir1, swir2], axis=0)
-            elif image_chw.shape[0] > 6:
-                image_chw = image_chw[:6]
-
+        # Prithvi-EO has a strict six-band optical input contract.  SAR and RGB
+        # observations are deliberately routed to the labelled statistical
+        # extractor; synthesizing missing NIR/SWIR bands would be fake evidence.
         if self._onnx is not None and image_chw.shape[0] == 6:
             arr = self._onnx.extract(image_chw)
             return FeatureMap(arr, self._onnx.model_name, False)

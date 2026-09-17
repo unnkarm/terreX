@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -155,31 +156,38 @@ class EmbeddingService:
         self.dim = settings.EMBEDDING_DIM
         self._real: Optional[_RealRemoteCLIP] = None
         self._loaded = False
+        self._load_lock = threading.Lock()
         self._checkpoint_path = None
+        self._model_version_cache: Optional[str] = None
         self._placeholder = _PlaceholderVisualEmbedder(self.dim)
 
     def _ensure_loaded(self):
         if self._loaded:
             return
-        self._loaded = True
-        self._checkpoint_path = self._find_checkpoint()
-        if self._checkpoint_path is not None:
-            try:
-                self._real = _RealRemoteCLIP(self._checkpoint_path)
-                logger.info("Loaded real RemoteCLIP checkpoint: %s", self._checkpoint_path)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.exception(
-                    "Found RemoteCLIP checkpoint but failed to load it. "
-                    "Falling back to placeholder embedder. Error: %s", exc
+        with self._load_lock:
+            if self._loaded:
+                return
+            self._checkpoint_path = self._find_checkpoint()
+            if self._checkpoint_path is not None:
+                try:
+                    self._real = _RealRemoteCLIP(self._checkpoint_path)
+                    logger.info("Loaded real RemoteCLIP checkpoint: %s", self._checkpoint_path)
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.exception(
+                        "Found RemoteCLIP checkpoint but failed to load it. "
+                        "Falling back to placeholder embedder. Error: %s", exc
+                    )
+                    self._real = None
+            else:
+                logger.warning(
+                    "No RemoteCLIP checkpoint found in %s. Using PLACEHOLDER "
+                    "visual-hash embeddings — results are wiring-only, not "
+                    "semantic AI similarity. See README for staging instructions.",
+                    settings.REMOTECLIP_DIR,
                 )
-                self._real = None
-        else:
-            logger.warning(
-                "No RemoteCLIP checkpoint found in %s. Using PLACEHOLDER "
-                "visual-hash embeddings — results are wiring-only, not "
-                "semantic AI similarity. See README for staging instructions.",
-                settings.REMOTECLIP_DIR,
-            )
+            # Publish the initialized state only after loading has completed so
+            # concurrent requests cannot observe a temporary placeholder.
+            self._loaded = True
 
     def _find_checkpoint(self) -> Optional[Path]:
         if not settings.REMOTECLIP_DIR.exists():
@@ -209,11 +217,31 @@ class EmbeddingService:
         self._ensure_loaded()
         if self._real is None:
             return "placeholder-visual-hash-v1"
-        try:
-            digest = hashlib.sha256(self._checkpoint_path.read_bytes()).hexdigest()[:16]
-            return f"{self._real.model_name}-{digest}"
-        except Exception:
-            return self._real.model_name
+        if self._model_version_cache is None:
+            try:
+                digest = hashlib.sha256()
+                with self._checkpoint_path.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                self._model_version_cache = f"{self._real.model_name}-{digest.hexdigest()[:16]}"
+            except Exception:
+                self._model_version_cache = self._real.model_name
+        return self._model_version_cache
+
+    def status_snapshot(self) -> dict:
+        """Return lightweight status without loading or hashing the checkpoint."""
+        checkpoint = self._find_checkpoint()
+        if self._loaded:
+            active_model = self._real.model_name if self._real is not None else self._placeholder.model_name
+        else:
+            active_model = "remoteclip-vit-b-32 (staged, lazy load)" if checkpoint else self._placeholder.model_name
+        return {
+            "staged": checkpoint is not None,
+            "loaded": self._loaded,
+            "available": self._real is not None if self._loaded else None,
+            "active_model": active_model,
+            "model_version": self._model_version_cache,
+        }
 
     def embed_text(self, text: str) -> EmbeddingResult:
         self._ensure_loaded()
