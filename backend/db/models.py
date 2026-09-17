@@ -153,6 +153,17 @@ class ChangeResult(Base):
     reasons = Column(JSON, nullable=True)
     method = Column(String, nullable=False)
     is_placeholder_model = Column(Boolean, default=False)
+    analysis_key = Column(String, nullable=True, index=True)
+    earliest_supported_observation = Column(DateTime, nullable=True)
+    confirmed_observation = Column(DateTime, nullable=True)
+    temporal_uncertainty_days = Column(Float, nullable=True)
+    persistence_status = Column(String, nullable=True)
+    persistence_log = Column(JSON, nullable=True)
+    observations = Column(JSON, nullable=True)
+    evidence = Column(JSON, nullable=True)
+    registration = Column(JSON, nullable=True)
+    dominant_change_type = Column(String, nullable=True)
+    dominant_dynamics = Column(String, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

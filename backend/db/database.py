@@ -112,6 +112,19 @@ def _ensure_ingestion_schema(engine):
             "embedding_model_version": "VARCHAR",
             "embedding": "JSON", "embedding_model": "VARCHAR", "embedding_is_placeholder": "BOOLEAN DEFAULT FALSE",
         },
+        "change_results": {
+            "analysis_key": "VARCHAR",
+            "earliest_supported_observation": "TIMESTAMP",
+            "confirmed_observation": "TIMESTAMP",
+            "temporal_uncertainty_days": "FLOAT",
+            "persistence_status": "VARCHAR",
+            "persistence_log": "JSON",
+            "observations": "JSON",
+            "evidence": "JSON",
+            "registration": "JSON",
+            "dominant_change_type": "VARCHAR",
+            "dominant_dynamics": "VARCHAR",
+        },
     }
     inspector = inspect(engine)
     with engine.begin() as conn:

@@ -111,6 +111,20 @@ class VectorStore:
         except Exception as exc:
             logger.warning("Qdrant delete failed for tile %s: %s", tile_id, exc)
 
+    def has_tile(self, tile_id: str) -> bool:
+        """Return whether the deterministic tile id is present in Qdrant."""
+        try:
+            points = self.client.retrieve(
+                collection_name=self.collection,
+                ids=[self._str_to_uint64(tile_id)],
+                with_payload=False,
+                with_vectors=False,
+            )
+            return bool(points)
+        except Exception as exc:
+            logger.warning("Qdrant existence check failed for tile %s: %s", tile_id, exc)
+            return False
+
     def count(self) -> int:
         """Return the number of indexed vectors, falling back to DB tiles when Qdrant is offline."""
         try:

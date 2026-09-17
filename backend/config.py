@@ -82,6 +82,17 @@ class Settings:
     CLOUD_FRACTION_MAX: float = float(os.getenv("CLOUD_FRACTION_MAX", "0.35"))
     MIN_QUALITY_SCORE: float = float(os.getenv("MIN_QUALITY_SCORE", "0.4"))
     CHANGE_PROB_THRESHOLD: float = float(os.getenv("CHANGE_PROB_THRESHOLD", "0.5"))
+    CHANGE_POINT_THRESHOLD: float = float(os.getenv("CHANGE_POINT_THRESHOLD", "0.18"))
+    CHANGE_MAP_THRESHOLD: float = float(os.getenv("CHANGE_MAP_THRESHOLD", "0.20"))
+    CHANGE_BASELINE_OBSERVATIONS: int = int(os.getenv("CHANGE_BASELINE_OBSERVATIONS", "3"))
+    CHANGE_PERSISTENCE_K: int = int(os.getenv("CHANGE_PERSISTENCE_K", "2"))
+
+    # Strict runtime AOI guard.  Acquisition scripts may stage wider Indian
+    # coverage, but the operational change engine is bounded to West Bengal.
+    KOLKATA_AOI_MIN_LON: float = float(os.getenv("KOLKATA_AOI_MIN_LON", "87.75"))
+    KOLKATA_AOI_MIN_LAT: float = float(os.getenv("KOLKATA_AOI_MIN_LAT", "21.40"))
+    KOLKATA_AOI_MAX_LON: float = float(os.getenv("KOLKATA_AOI_MAX_LON", "88.65"))
+    KOLKATA_AOI_MAX_LAT: float = float(os.getenv("KOLKATA_AOI_MAX_LAT", "23.60"))
 
     CORS_ORIGINS: list = os.getenv("CORS_ORIGINS", "*").split(",")
 
