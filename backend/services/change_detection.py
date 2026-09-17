@@ -145,10 +145,6 @@ def _prepare_prithvi_input(raster: np.ndarray, band_map: Optional[Dict[str, int]
     bands = [raster[..., band_map[name]] for name in required]
     if "swir2" in band_map and band_map["swir2"] < raster.shape[-1]:
         bands.append(raster[..., band_map["swir2"]])
-    elif raster.shape[-1] >= 6:
-        # If SWIR2 is unmapped (e.g. S2 L2A tile packed as scl at index 5 or 6), use 6th channel
-        idx = band_map.get("scl", 5)
-        bands.append(raster[..., idx if idx < raster.shape[-1] else 5])
     else:
         return None
 

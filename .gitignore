@@ -21,3 +21,4 @@ frontend/powershell.cmd
 *.db
 *.onnx
 data/offline_basemap
+graphify-out/*

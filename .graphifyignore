@@ -1,0 +1,37 @@
+# Graphify Ignore Patterns for TerreX
+
+# Huge satellite datasets and rasters (50k+ files)
+data/
+data
+
+# Model weights
+models/change/
+models/prithvi/
+models/remoteclip/
+
+# Temporary and build directories
+scratch/
+scratch
+graphify-out/
+graphify-out
+.agents/
+.pytest_cache/
+.vscode/
+
+# Binary & Cache Files
+*.tif
+*.tiff
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.pt
+*.pth
+*.bin
+*.onnx
+*.tar.gz
+*.zip
+*.db
+*.sqlite
+*.sqlite3
+*.log

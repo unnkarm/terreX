@@ -47,13 +47,24 @@ def get_review_queue(
     AfterTile = aliased(Tile)
     BeforeScene = aliased(Scene)
     AfterScene = aliased(Scene)
-    changes = db.execute(
+    change_rows = db.execute(
         select(ChangeResult, BeforeTile, AfterTile, BeforeScene, AfterScene)
         .join(BeforeTile, BeforeTile.tile_id == ChangeResult.before_tile_id)
         .join(AfterTile, AfterTile.tile_id == ChangeResult.after_tile_id)
         .join(BeforeScene, BeforeScene.scene_id == BeforeTile.scene_id, isouter=True)
         .join(AfterScene, AfterScene.scene_id == AfterTile.scene_id, isouter=True)
     ).all()
+    # Older builds persisted a new row every time the same pair was inspected.
+    # Collapse those legacy duplicates without deleting any evidence. New dense
+    # analyses carry a stable analysis_key and are updated in place.
+    deduplicated = {}
+    for row in change_rows:
+        change = row[0]
+        key = change.analysis_key or f"{change.before_tile_id}:{change.after_tile_id}"
+        current = deduplicated.get(key)
+        if current is None or (change.created_at or datetime.min) > (current[0].created_at or datetime.min):
+            deduplicated[key] = row
+    changes = list(deduplicated.values())
 
     feedback_rows = db.execute(select(Feedback).where(Feedback.target_type == "change_result")).scalars().all()
     by_target = defaultdict(list)
@@ -77,7 +88,9 @@ def get_review_queue(
         priority = max(0.0, min(1.0, float(change.confidence or 0.0) + feedback_adjustment))
         queue.append({
             "id": change.change_id,
-            "targetId": change.after_tile_id,
+            # Feedback for a change_result must target the persisted candidate,
+            # not its after-tile.  The UI uses this value when posting a verdict.
+            "targetId": change.change_id,
             "type": "Change candidate",
             "confidence": float(change.confidence or 0.0),
             "priority": priority,
@@ -103,6 +116,13 @@ def get_review_queue(
                 "reasons": change.reasons or [],
                 "method": change.method,
                 "is_placeholder_model": bool(change.is_placeholder_model),
+                "earliest_supported_observation": _date(change.earliest_supported_observation),
+                "confirmed_observation": _date(change.confirmed_observation),
+                "temporal_uncertainty_days": change.temporal_uncertainty_days,
+                "persistence_status": change.persistence_status,
+                "persistence_log": change.persistence_log or [],
+                "observations": change.observations or [],
+                "registration": change.registration or {},
             },
             "feedback": {
                 "confirm_count": confirms,

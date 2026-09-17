@@ -185,6 +185,50 @@ def _warp(image: np.ndarray, matrix: np.ndarray, height: int, width: int) -> np.
     )
 
 
+def _phase_registration(
+    gray_ref: np.ndarray,
+    gray_tgt: np.ndarray,
+    after_img: np.ndarray,
+    corr_before: float,
+) -> Optional[RegistrationResult]:
+    """Apply the FFT translation estimate, keeping the better-sign candidate."""
+    h, w = gray_ref.shape[:2]
+    (shift_x, shift_y), response = cv2.phaseCorrelate(
+        gray_ref.astype(np.float64), gray_tgt.astype(np.float64)
+    )
+    if abs(shift_x) >= (w * 0.25) or abs(shift_y) >= (h * 0.25):
+        return None
+
+    candidates = []
+    for dx, dy in ((-shift_x, -shift_y), (shift_x, shift_y)):
+        matrix = np.float32([[1.0, 0.0, dx], [0.0, 1.0, dy]])
+        aligned = cv2.warpAffine(
+            after_img,
+            matrix,
+            (w, h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT_101,
+        )
+        correlation = compute_correlation(gray_ref, _to_gray_uint8(aligned))
+        candidates.append((correlation, aligned, matrix, float(dx), float(dy)))
+
+    corr_after, aligned_after, matrix, dx, dy = max(candidates, key=lambda item: item[0])
+    return RegistrationResult(
+        aligned_after=aligned_after,
+        transform_matrix=matrix,
+        inliers=0,
+        correlation_before=corr_before,
+        correlation_after=corr_after,
+        is_aligned=bool(response > 0.05 and corr_after >= max(0.3, corr_before - 0.05)),
+        dx=dx,
+        dy=dy,
+        residual_dx=0.0,
+        residual_dy=0.0,
+        method="fft-phase-correlation",
+        footprint=warp_footprint(matrix, h, w),
+    )
+
+
 def _phase_correlation_fallback(
     before_img: np.ndarray,
     after_img: np.ndarray,
@@ -202,38 +246,15 @@ def _phase_correlation_fallback(
     the caller reports the pair as unaligned rather than warping it blindly.
     """
     h, w = before_img.shape[:2]
-    # phaseCorrelate(a, b) reports how far b sits from a. Bringing b back onto
-    # a therefore means translating by the negative of that offset — applying
-    # it as-is doubles the misalignment instead of removing it.
-    (offset_dx, offset_dy), _response = cv2.phaseCorrelate(
-        gray_ref.astype(np.float64), gray_tgt.astype(np.float64)
-    )
-    if abs(offset_dx) >= (w * 0.25) or abs(offset_dy) >= (h * 0.25):
+    phase = _phase_registration(gray_ref, gray_tgt, after_img, corr_before)
+    if phase is None:
         return None
 
-    shift_dx, shift_dy = -offset_dx, -offset_dy
-    matrix = np.float32([[1.0, 0.0, shift_dx], [0.0, 1.0, shift_dy]])
-    aligned_after = _warp(after_img, matrix, h, w)
-    corr_after = compute_correlation(_to_gray_float(before_img), _to_gray_float(aligned_after))
-    residual_dx, residual_dy = measure_residual_shift(before_img, aligned_after)
-
-    return RegistrationResult(
-        aligned_after=aligned_after,
-        transform_matrix=matrix,
-        inliers=inliers,
-        correlation_before=corr_before,
-        correlation_after=corr_after,
-        # Correlation between two dates drops with genuine ground change as well
-        # as with misalignment, so alignment is judged on whether the warp held
-        # or improved it, against an absolute floor that pure noise cannot meet.
-        is_aligned=corr_after >= max(0.3, corr_before - 0.05),
-        dx=float(shift_dx),
-        dy=float(shift_dy),
-        residual_dx=residual_dx,
-        residual_dy=residual_dy,
-        method="fft-phase-correlation",
-        footprint=warp_footprint(matrix, h, w),
-    )
+    phase.inliers = inliers
+    phase.footprint = warp_footprint(phase.transform_matrix, h, w)
+    phase.residual_dx, phase.residual_dy = measure_residual_shift(before_img, phase.aligned_after)
+    phase.is_aligned = phase.correlation_after >= max(0.3, corr_before - 0.05)
+    return phase
 
 
 def _unaligned(
@@ -254,10 +275,10 @@ def _unaligned(
         is_aligned=False,
         dx=dx,
         dy=dy,
-        # Nothing was corrected, so whatever misalignment exists is still there.
         residual_dx=dx,
         residual_dy=dy,
         method="none",
+        footprint=None if matrix is None else warp_footprint(matrix, *after_img.shape[:2]),
     )
 
 
@@ -331,7 +352,12 @@ def register_image_pair(
 
     if len(good_matches) < min_inliers:
         fallback = _phase_correlation_fallback(
-            before_img, after_img, gray_ref, gray_tgt, corr_before, len(good_matches)
+            before_img,
+            after_img,
+            gray_ref,
+            gray_tgt,
+            corr_before,
+            len(good_matches),
         )
         return fallback if fallback is not None else _unaligned(after_img, None, len(good_matches), corr_before)
 

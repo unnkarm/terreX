@@ -44,11 +44,7 @@ class Sentinel2DataSource(BaseEODataSource):
         output_dir: Path,
         target_bbox: Optional[List[float]] = None,
     ) -> Path:
-        """
-        Uses scripts/download_planetary_scenes.py logic to stream windowed bands
-        directly into normalized 6-band GeoTIFF.
-        """
-        output_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"Sentinel-2_{item.acquisition_date.strftime('%Y%m%d')}_{item.item_id[:12]}.tif"
-        out_path = output_dir / filename
-        return out_path
+        raise RuntimeError(
+            "Sentinel-2 staging is disabled in the air-gapped runtime. "
+            "Run scripts/acquire_sentinel2.py in the separated acquisition environment."
+        )

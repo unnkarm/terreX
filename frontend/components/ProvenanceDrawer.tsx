@@ -22,120 +22,51 @@ interface StageDetail {
 }
 
 export default function ProvenanceDrawer({ result, isOpen, onClose }: ProvenanceDrawerProps) {
-  const [activeStage, setActiveStage] = useState<number>(6); // default on Change detection
+  const [activeStage, setActiveStage] = useState<number>(0);
 
   if (!isOpen || !result) return null;
 
+  const provenance = result.provenance || {};
+  const sourcePortal = result.source_portal ?? (provenance.source_portal as string | undefined) ?? "Not recorded";
+  const dataset = result.underlying_dataset ?? (provenance.underlying_dataset as string | undefined) ?? "Not recorded";
+  const license = result.license ?? (provenance.license as string | undefined) ?? "Not recorded";
   const stages: StageDetail[] = [
     {
       id: "source",
-      name: "Source Scene Acquisition",
+      name: "Recorded Source Metadata",
       status: "VERIFIED",
-      model: "ISRO / ESA Payload Telemetry",
-      version: "L2A Surface Reflectance",
-      timestamp: result.acquisition_date ?? "2026-05-18T05:42:11Z",
-      inputs: `Raw Bands B02, B03, B04, B08, B11, B12 (${result.sensor ?? "Sentinel-2 MSI"})`,
-      outputs: "GeoTIFF COG (EPSG:32645, 10m Ground Sample Distance)",
-      notes: "Acquired via air-gapped direct orbit downlink without public egress.",
+      model: sourcePortal,
+      version: dataset,
+      timestamp: result.acquisition_date ?? "Not recorded",
+      inputs: `Sensor: ${result.sensor ?? "Not recorded"}`,
+      outputs: `License: ${license}`,
+      notes: Object.keys(provenance).length > 0
+        ? "Values shown exactly as stored in the scene provenance record."
+        : "No structured provenance object was attached to this search result.",
     },
     {
-      id: "ingestion",
-      name: "Scene Ingestion & Validation",
+      id: "tile",
+      name: "Indexed Tile Record",
       status: "COMPLETE",
-      model: "Rasterio / GDAL Air-gapped Engine",
-      version: "v3.8.4",
-      timestamp: "2026-05-18T06:12:00Z",
-      inputs: result.scene_id,
-      outputs: "Validated Geospatial Metadata & Polygon Footprint",
-      notes: "Strict GDAL validation passed: No coordinate drift or CRS distortion.",
-    },
-    {
-      id: "tiling",
-      name: "Tile Chip Extraction",
-      status: "COMPLETE",
-      model: "Windowed Geo-Tiler",
-      version: "v1.2",
-      timestamp: "2026-05-18T06:14:15Z",
-      inputs: "256x256 pixel sliding window, 0% stride overlap",
-      outputs: `Tile ID: ${result.tile_id} (${result.lat.toFixed(4)}°N, ${result.lon.toFixed(4)}°E)`,
-      notes: "Extracted high-fidelity 6-band multispectral NPZ tensor pack and preview RGB chip.",
-    },
-    {
-      id: "quality",
-      name: "Quality & Cloud Gating",
-      status: "COMPLETE",
-      model: "Rule-based Radiometric Inspector",
-      version: "v2.0",
-      timestamp: "2026-05-18T06:15:30Z",
-      inputs: "Blue/SWIR thresholding + Sobel gradient sharpness",
-      outputs: `Cloud: ${((result.cloud_fraction ?? 0.03) * 100).toFixed(1)}% | Quality Score: ${(result.quality_score ?? 0.94).toFixed(3)}`,
-      notes: "Passed quality barrier threshold (Q > 0.25). Nominal clear-sky candidate.",
-    },
-    {
-      id: "registration",
-      name: "Sub-Pixel Co-Registration",
-      status: "COMPLETE",
-      model: "ORB + RANSAC Affine Warp",
-      version: "OpenCV 4.9 Local",
-      timestamp: "2026-05-18T06:16:05Z",
-      inputs: "T0 Baseline Raster vs T1 Current Observation",
-      outputs: "Homography Warp Matrix | Post-alignment Correlation: 0.96 (84 inliers)",
-      notes: "Eliminated false-edge parallax and flight path georeferencing jitter.",
-    },
-    {
-      id: "normalization",
-      name: "Radiometric Normalization",
-      status: "COMPLETE",
-      model: "Cumulative Histogram Matching",
-      version: "v1.0",
-      timestamp: "2026-05-18T06:16:45Z",
-      inputs: "Aligned T1 Multispectral Bands",
-      outputs: "Atmospherically balanced cross-observation reflectance stack",
-      notes: "Suppressed sun-zenith angle discrepancies and atmospheric haze variations.",
+      model: "TerreX local metadata store",
+      version: result.scene_id,
+      timestamp: result.acquisition_date ?? "Not recorded",
+      inputs: `Tile ID: ${result.tile_id}`,
+      outputs: `Coordinates: ${result.lat.toFixed(5)}°N, ${result.lon.toFixed(5)}°E`,
+      notes: `Quality: ${result.quality_score == null ? "N/A" : result.quality_score.toFixed(3)}; cloud fraction: ${result.cloud_fraction == null ? "N/A" : result.cloud_fraction.toFixed(3)}.`,
     },
     {
       id: "embedding",
-      name: "Feature Extraction & Embeddings",
-      status: "ACTIVE",
-      model: result.embedding_model ?? "RemoteCLIP-ViT-B32",
-      version: "Local Weights ONNX/Torch",
-      timestamp: "2026-05-18T06:17:10Z",
-      inputs: "Normalized 3-channel optical chip (256x256)",
-      outputs: "512-dimensional semantic vector indexed in Qdrant Vector DB",
-      notes: "Deterministic spatial embedding generated strictly offline with zero egress.",
-    },
-    {
-      id: "change_detection",
-      name: "Bi-Temporal Siamese Diffing",
-      status: "COMPLETE",
-      model: "Prithvi-EO 100M Foundation Head",
-      version: "v1.0",
-      timestamp: "2026-05-18T06:17:40Z",
-      inputs: "T0 vs T1 deep feature representations",
-      outputs: "Continuous change probability map + Otsu binary segmentation",
-      notes: "Extracted change regions with ground area calculation (4,820 m²).",
-    },
-    {
-      id: "classification",
-      name: "Layer-2 Change Classification",
-      status: "COMPLETE",
-      model: "Spectral Decision Rules (NDVI / NDBI / NDWI)",
-      version: "v2.1",
-      timestamp: "2026-05-18T06:18:02Z",
-      inputs: "ΔNDBI (+0.42), ΔNDVI (-0.38), Elongation (1.34)",
-      outputs: "Class: CONSTRUCTION (Confidence: 89%)",
-      notes: "Classified based on morphological compactness and strong built-up index increase.",
-    },
-    {
-      id: "ranking",
-      name: "Composite Multi-Factor Ranking",
-      status: "COMPLETE",
-      model: "TerreX Intelligence Ranker",
-      version: "v2.2",
-      timestamp: "2026-05-18T06:18:20Z",
-      inputs: "Semantic similarity (0.91) * Quality (0.94) * Temporal consistency",
-      outputs: `Final Score: ${(result.final_score).toFixed(3)} (#1 Queue Priority)`,
-      notes: "Ranked and published to Analyst Review Queue for human-in-the-loop verification.",
+      name: "Stored Embedding Metadata",
+      status: result.embedding_is_placeholder ? "ACTIVE" : "COMPLETE",
+      model: result.embedding_model ?? "Not recorded",
+      version: result.embedding_model_version ?? "Not recorded",
+      timestamp: "Not recorded",
+      inputs: "Stored tile image",
+      outputs: `Similarity: ${result.similarity_score.toFixed(4)}; final score: ${result.final_score.toFixed(4)}`,
+      notes: result.embedding_is_placeholder
+        ? "This vector is explicitly marked as a placeholder embedding and must not be treated as semantic model evidence."
+        : "The result record does not mark this embedding as a placeholder.",
     },
   ];
 

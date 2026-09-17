@@ -211,7 +211,7 @@ def main():
     parser = argparse.ArgumentParser(description="Download real Sentinel-2 GeoTIFFs from Planetary Computer.")
     parser.add_argument(
         "--preset",
-        choices=["kolkata", "delhi"],
+        choices=["kolkata"],
         default="kolkata",
         help="Predefined geographic AOI (default: kolkata)",
     )
@@ -263,13 +263,15 @@ def main():
             "bbox": [88.25, 22.45, 88.48, 22.65],  # Hooghly river & urban expansion (~35 km²)
             "dates": ["2023-01-01", "2026-09-04"],
         },
-        "delhi": {
-            "bbox": [77.18, 28.52, 77.32, 28.66],  # Yamuna riverbank & construction
-            "dates": ["2023-01-01", "2026-09-04"],
-        },
     }
 
     selected_bbox = args.bbox or PRESETS[args.preset]["bbox"]
+    operational_bounds = [87.75, 21.40, 88.65, 23.60]
+    if not (
+        operational_bounds[0] <= selected_bbox[0] < selected_bbox[2] <= operational_bounds[2]
+        and operational_bounds[1] <= selected_bbox[1] < selected_bbox[3] <= operational_bounds[3]
+    ):
+        parser.error(f"AOI must stay inside {operational_bounds}; max longitude is 88.65E")
     selected_dates = args.dates or PRESETS[args.preset]["dates"]
     out_dir = args.out_dir or (Path(__file__).resolve().parent.parent / "data" / "incoming")
     out_dir.mkdir(parents=True, exist_ok=True)

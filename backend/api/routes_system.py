@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from fastapi import APIRouter
 
 from config import settings
@@ -9,8 +10,8 @@ from services.chat_agent import chat_status, maybe_unload_llm
 from services.vector_store import vector_store
 from services.capabilities import CAPABILITIES
 from db.database import get_session
-from db.models import Tile
-from sqlalchemy import select
+from db.models import ChangeResult, Feedback, Scene, Tile
+from sqlalchemy import func, select
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -26,19 +27,24 @@ def status():
     vector_index_count = vector_store.count()
     with get_session() as session:
         stored_versions = sorted({v for v in session.execute(select(Tile.embedding_model_version)).scalars().all() if v})
-    current_embedding_version = embedding_service.model_version
-    embedding_version_warning = bool(stored_versions and current_embedding_version not in stored_versions)
+        record_counts = {
+            "scenes": int(session.scalar(select(func.count()).select_from(Scene)) or 0),
+            "tiles": int(session.scalar(select(func.count()).select_from(Tile)) or 0),
+            "changes": int(session.scalar(select(func.count()).select_from(ChangeResult)) or 0),
+            "feedback": int(session.scalar(select(func.count()).select_from(Feedback)) or 0),
+        }
+    remoteclip = embedding_service.status_snapshot()
+    current_embedding_version = remoteclip["model_version"]
+    embedding_version_warning = bool(
+        current_embedding_version and stored_versions and current_embedding_version not in stored_versions
+    )
     chat = chat_status()
     return {
         "offline_mode": settings.OFFLINE_MODE,
         "processing_version": settings.PROCESSING_VERSION,
         "models": {
             "remoteclip": {
-                "staged": not embedding_service.is_placeholder,
-                "active_model": (
-                    embedding_service._real.model_name if not embedding_service.is_placeholder
-                    else embedding_service._placeholder.model_name
-                ),
+                **remoteclip,
             },
             "prithvi": {
                 "staged": not prithvi_service.is_placeholder,
@@ -59,6 +65,14 @@ def status():
         "embedding_model_version": current_embedding_version,
         "stored_embedding_model_versions": stored_versions,
         "embedding_version_warning": embedding_version_warning,
+        "record_counts": record_counts,
+        "security_guards": {
+            "offline_mode_configured": settings.OFFLINE_MODE,
+            "basemap_outbound_fetch_enabled": not settings.OFFLINE_MODE,
+            "hf_hub_offline": os.environ.get("HF_HUB_OFFLINE") == "1",
+            "transformers_offline": os.environ.get("TRANSFORMERS_OFFLINE") == "1",
+            "proj_network_off": os.environ.get("PROJ_NETWORK", "").upper() == "OFF",
+        },
         "capabilities": CAPABILITIES,
     }
 

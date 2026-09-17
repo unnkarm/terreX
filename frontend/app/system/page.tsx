@@ -12,54 +12,56 @@ export default function SystemStatusPage() {
     getSystemStatus().then(setStatus).catch(() => {});
   }, []);
 
+  const guard = status?.security_guards;
+  const offlineConfigured = guard?.offline_mode_configured === true;
   const models = [
     {
-      name: "RemoteCLIP ViT-B/32",
+      name: status?.models.remoteclip.active_model || "RemoteCLIP status unavailable",
       role: "Vision-Language Cross-Modal Semantic Embedding",
-      status: "READY",
-      weights: "LOCAL AIR-GAPPED WEIGHTS",
-      parameters: "149M Parameters &middot; 512-dim embedding",
-      license: "Open / Research (Apache 2.0 / BSD)",
-      egress: "STRICT ZERO NETWORK EGRESS",
-      latency: "14.2 ms / inference",
+      status: !status ? "UNKNOWN" : status.models.remoteclip.staged ? (status.models.remoteclip.loaded ? "LOADED" : "STAGED") : "PLACEHOLDER",
+      weights: status?.models.remoteclip.staged ? "LOCAL CHECKPOINT FOUND" : "NO REAL CHECKPOINT FOUND",
+      parameters: status?.models.remoteclip.model_version || "Version resolved after first local inference",
+      license: "See staged checkpoint provenance",
+      egress: offlineConfigured ? "OFFLINE MODE CONFIGURED" : "OFFLINE MODE NOT CONFIGURED",
+      latency: "NOT MEASURED BY STATUS ENDPOINT",
     },
     {
-      name: "Prithvi-EO 100M Bi-Temporal",
-      role: "Multi-Temporal Foundation Difference & Feature Extraction",
-      status: "READY",
-      weights: "LOCAL AIR-GAPPED WEIGHTS",
-      parameters: "100M Parameters &middot; Siamese Vision Transformer",
-      license: "Apache 2.0 (NASA-IBM Foundation Model)",
-      egress: "STRICT ZERO NETWORK EGRESS",
-      latency: "28.5 ms / tile pair",
+      name: status?.models.prithvi.active_model || "Prithvi status unavailable",
+      role: "Optical Feature Extraction (strict six-band input only)",
+      status: !status ? "UNKNOWN" : status.models.prithvi.staged ? "STAGED" : "STATISTICAL FALLBACK",
+      weights: status?.models.prithvi.staged ? "LOCAL CHECKPOINT FOUND" : "NO REAL CHECKPOINT FOUND",
+      parameters: "Input contract is reported by the active local model",
+      license: "See staged checkpoint provenance",
+      egress: offlineConfigured ? "OFFLINE MODE CONFIGURED" : "OFFLINE MODE NOT CONFIGURED",
+      latency: "NOT MEASURED BY STATUS ENDPOINT",
     },
     {
       name: "ORB + RANSAC Co-Registration",
       role: "Sub-pixel Affine & Homography Geometric Alignment",
-      status: "READY",
-      weights: "C++ / OpenCV Local Compiled",
-      parameters: "Adaptive Harris corners, 84 inliers minimum",
+      status: status ? "AVAILABLE" : "UNKNOWN",
+      weights: "LOCAL OPENCV CODE PATH",
+      parameters: "Reports measured inliers, shift, and before/after correlation per pass",
       license: "BSD",
-      egress: "LOCAL CPU / GPU ACCELERATION",
-      latency: "8.1 ms / pair",
+      egress: "LOCAL PROCESS",
+      latency: "MEASURED PER ANALYSIS, NOT SYNTHESIZED",
     },
     {
       name: "Spectral Index Delta Engine",
-      role: "Biophysical Ratio Delta (ΔNDVI, ΔNDWI, ΔNDBI)",
-      status: "READY",
-      weights: "Vectorized NumPy / C Engine",
-      parameters: "Multi-band multispectral NPZ parsing",
-      license: "Proprietary ISRO SIH Implementation",
-      egress: "LOCAL SYSTEM MEMORY",
-      latency: "2.4 ms / tile",
+      role: "Per-pass ΔNDVI, ΔNDWI, and ΔNDBI trajectories",
+      status: status ? "AVAILABLE" : "UNKNOWN",
+      weights: "VECTORIZED LOCAL NUMPY",
+      parameters: "Only emitted for imagery with valid optical band mappings",
+      license: "TerreX implementation",
+      egress: "LOCAL PROCESS",
+      latency: "NOT MEASURED BY STATUS ENDPOINT",
     },
   ];
 
   const infrastructure = [
-    { name: "PostGIS Spatial RDBMS", host: "localhost:5432", status: "ONLINE", version: "PostgreSQL 16 + PostGIS 3.4", records: "184 scenes, 24,891 tile geometries" },
-    { name: "Qdrant Vector Database", host: "localhost:6333", status: "ONLINE", version: "Qdrant v1.9.0 Local", records: "512-dim HNSW Cosine Index" },
-    { name: "Static Raster Storage", host: "local filesystem (/data)", status: "ONLINE", version: "Read-only POSIX mount", records: "GeoTIFFs, PNG tiles, change masks" },
-    { name: "FastAPI REST API", host: "localhost:8000", status: "ONLINE", version: "TerreX Core v2.2.0", records: "Air-gapped enforcement active" },
+    { name: "Metadata Database", host: "configured local database", status: status ? "RESPONDING" : "UNKNOWN", version: "Counts returned by live API", records: status?.record_counts ? `${status.record_counts.scenes} scenes, ${status.record_counts.tiles} tiles, ${status.record_counts.changes} changes` : "No response" },
+    { name: "Qdrant Vector Database", host: "configured local Qdrant", status: status ? "RESPONDING" : "UNKNOWN", version: "Additive vector collection", records: status ? `${status.vector_index_count ?? 0} vectors (no reset performed)` : "No response" },
+    { name: "Static Raster Storage", host: status?.paths?.data_dir || "configured local data path", status: status ? "CONFIGURED" : "UNKNOWN", version: "Local GeoTIFF, thumbnails, and change masks", records: "Capacity not sampled by lightweight status" },
+    { name: "FastAPI REST API", host: "local runtime", status: status ? "RESPONDING" : "UNKNOWN", version: status?.processing_version || "Unknown processing version", records: offlineConfigured ? "Offline mode configured" : "Offline mode not confirmed" },
   ];
 
   return (
@@ -73,7 +75,7 @@ export default function SystemStatusPage() {
             <div className="font-mono text-xs text-radar font-semibold tracking-widest uppercase flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-radar animate-pulse"></span>
               <span>SECURITY VERIFICATION:</span>
-              <span>ZERO EGRESS ACTIVE</span>
+              <span>{offlineConfigured ? "OFFLINE CONFIGURATION ACTIVE" : "STATUS NOT CONFIRMED"}</span>
             </div>
             
             <h1 className="text-4xl sm:text-5xl font-bold tracking-tight text-white font-sans leading-[1.1]">
@@ -88,9 +90,9 @@ export default function SystemStatusPage() {
           </div>
 
           <div className="flex items-center gap-2 text-xs">
-            <span className="px-4 py-2.5 rounded bg-emerald-950/60 border border-emerald-500/50 text-emerald-400 font-mono text-xs font-bold uppercase tracking-wider flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              AIR-GAPPED MODE ACTIVE
+            <span className={`px-4 py-2.5 rounded border font-mono text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${offlineConfigured ? "bg-emerald-950/60 border-emerald-500/50 text-emerald-400" : "bg-amber-950/60 border-amber-500/50 text-amber-300"}`}>
+              <span className={`w-2 h-2 rounded-full ${offlineConfigured ? "bg-emerald-400" : "bg-amber-400"}`} />
+              {offlineConfigured ? "OFFLINE MODE CONFIGURED" : "OFFLINE MODE UNVERIFIED"}
             </span>
           </div>
         </div>
@@ -102,26 +104,26 @@ export default function SystemStatusPage() {
               <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
               SECURITY &amp; NETWORK BOUNDARY GUARDS
             </span>
-            <span className="text-[10px] text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800 font-bold">
-              VERIFIED COMPLIANT
+            <span className={`text-[10px] px-2 py-0.5 rounded border font-bold ${offlineConfigured ? "text-emerald-400 bg-emerald-950/40 border-emerald-800" : "text-amber-300 bg-amber-950/40 border-amber-800"}`}>
+              {offlineConfigured ? "CONFIGURATION CHECK PASSED" : "UNVERIFIED"}
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-mono">
             <div className="p-3.5 rounded bg-black/60 border border-neutral-800 space-y-1">
               <span className="text-[10px] text-neutral-500 uppercase block">EXTERNAL CLOUD EGRESS</span>
-              <span className="text-emerald-400 font-bold text-sm block">DISABLED (0 bytes/sec)</span>
-              <span className="text-[10px] text-neutral-500 block font-sans">No telemetry or imagery leaves perimeter</span>
+              <span className="text-emerald-400 font-bold text-sm block">{guard?.basemap_outbound_fetch_enabled === false ? "BASEMAP FETCH DISABLED" : "NOT CONFIRMED"}</span>
+              <span className="text-[10px] text-neutral-500 block font-sans">Configuration state; network bytes are not fabricated</span>
             </div>
             <div className="p-3.5 rounded bg-black/60 border border-neutral-800 space-y-1">
               <span className="text-[10px] text-neutral-500 uppercase block">ENVIRONMENT GUARDS</span>
-              <span className="text-white font-bold text-sm block">HF_HUB_OFFLINE=1</span>
-              <span className="text-[10px] text-neutral-500 block font-sans">TRANSFORMERS_OFFLINE=1 active</span>
+              <span className="text-white font-bold text-sm block">HF: {guard?.hf_hub_offline ? "OFFLINE" : "UNSET"}</span>
+              <span className="text-[10px] text-neutral-500 block font-sans">Transformers: {guard?.transformers_offline ? "offline" : "unset"}</span>
             </div>
             <div className="p-3.5 rounded bg-black/60 border border-neutral-800 space-y-1">
               <span className="text-[10px] text-neutral-500 uppercase block">GEOSPATIAL NETWORK (PROJ)</span>
-              <span className="text-white font-bold text-sm block">PROJ_NETWORK=OFF</span>
-              <span className="text-[10px] text-neutral-500 block font-sans">Local datum shift grids embedded</span>
+              <span className="text-white font-bold text-sm block">{guard?.proj_network_off ? "PROJ_NETWORK=OFF" : "PROJ NETWORK UNVERIFIED"}</span>
+              <span className="text-[10px] text-neutral-500 block font-sans">Reports the actual process environment</span>
             </div>
           </div>
         </div>
@@ -145,7 +147,7 @@ export default function SystemStatusPage() {
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-bold text-white">{m.name}</span>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-bold">
+                    <span className={`text-[10px] px-2 py-0.5 rounded border font-bold ${m.status === "LOADED" || m.status === "AVAILABLE" || m.status === "STAGED" ? "bg-emerald-950 text-emerald-400 border-emerald-800" : "bg-amber-950 text-amber-300 border-amber-800"}`}>
                       {m.status}
                     </span>
                   </div>
@@ -191,8 +193,8 @@ export default function SystemStatusPage() {
               <div key={i} className="p-4 rounded-lg bg-neutral-950 border border-neutral-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-white truncate max-w-[150px]">{inf.name}</span>
-                  <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  <span className={`text-[10px] font-bold flex items-center gap-1 ${inf.status === "UNKNOWN" ? "text-amber-300" : "text-emerald-400"}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${inf.status === "UNKNOWN" ? "bg-amber-400" : "bg-emerald-400"}`} />
                     {inf.status}
                   </span>
                 </div>

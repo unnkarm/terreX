@@ -7,7 +7,7 @@ import TopNav from "@/components/TopNav";
 import {
   processIncoming, uploadFileAndIngest,
   searchEOProvider, stageEOProviderScene, EOProviderSearchResult,
-  fetchIngestStats, IngestStats,
+  fetchIngestStats, fetchIngestionJob, IngestStats,
 } from "@/lib/api";
 
 type SourceType = "sentinel2" | "sentinel1" | "isro-bhuvan" | "isro-mosdac" | "usgs-landsat";
@@ -19,7 +19,8 @@ export default function IngestPage() {
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<any | null>(null);
   const [ingestStats, setIngestStats] = useState<IngestStats | null>(null);
-  const [selectedIndianAoi, setSelectedIndianAoi] = useState<"kolkata" | "delhi" | "bengaluru">("kolkata");
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const selectedIndianAoi = "kolkata" as const;
   const [providerResults, setProviderResults] = useState<EOProviderSearchResult[]>([]);
   const [isSearchingProvider, setIsSearchingProvider] = useState(false);
 
@@ -42,6 +43,37 @@ export default function IngestPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!activeJobId) return;
+    const updateJob = async () => {
+      try {
+        const job = await fetchIngestionJob(activeJobId);
+        setCurrentFile(job.current_file);
+        setStageProgress({
+          validation: job.stage_progress.validation === 100 ? "complete" : "active",
+          georeference: job.stage_progress.georeference === 100 ? "complete" : "active",
+          tiling: job.stage_progress.tiling ?? 0,
+          quality: job.stage_progress.quality ?? 0,
+          embedding: job.stage_progress.embedding ?? 0,
+          indexing: job.stage_progress.indexing === 100 ? "complete" : job.phase === "indexing" ? "active" : "waiting",
+        });
+        if (job.status !== "running") {
+          setIsProcessing(false);
+          setActiveJobId(null);
+          setMetrics({ tiles_created: job.processed.reduce((n, item) => n + (item.created_tiles ?? item.tiles ?? 0), 0), tiles_skipped: job.skipped.reduce((n, item) => n + (item.skipped_tiles ?? 0), 0), tiles_discarded: job.processed.reduce((n, item) => n + (item.discarded_tiles ?? 0), 0) });
+          addLog(job.status === "complete" ? `COMPLETE: ${job.processed.length} scene(s) processed; ${job.failed.length} failed.` : `ERROR: ${job.message}`);
+        }
+      } catch (err: any) {
+        setIsProcessing(false);
+        setActiveJobId(null);
+        addLog(`ERROR: Live telemetry unavailable: ${err?.message || "Unknown error"}`);
+      }
+    };
+    updateJob();
+    const interval = setInterval(updateJob, 1000);
+    return () => clearInterval(interval);
+  }, [activeJobId]);
+
   const [stageProgress, setStageProgress] = useState<{
     validation: "pending" | "active" | "complete";
     georeference: "pending" | "active" | "complete";
@@ -59,18 +91,19 @@ export default function IngestPage() {
   });
   const [logs, setLogs] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const provenanceInputRef = useRef<HTMLInputElement>(null);
+  const [selectedRaster, setSelectedRaster] = useState<File | null>(null);
+  const [selectedProvenance, setSelectedProvenance] = useState<File | null>(null);
 
   const AOI_COORDS = {
     kolkata: [88.25, 22.45, 88.48, 22.65] as [number, number, number, number],
-    delhi: [77.10, 28.45, 77.40, 28.75] as [number, number, number, number],
-    bengaluru: [77.50, 12.80, 77.80, 13.10] as [number, number, number, number],
   };
 
   const addLog = (msg: string) => {
     setLogs((prev) => [...prev, `[${new Date().toISOString().split("T")[1].slice(0, 8)}] ${msg}`]);
   };
 
-  const simulateProgress = (sceneName: string) => {
+  const beginProcessing = () => {
     setStageProgress({
       validation: "active",
       georeference: "pending",
@@ -79,37 +112,25 @@ export default function IngestPage() {
       embedding: 0,
       indexing: "waiting",
     });
-
-    setTimeout(() => {
-      setStageProgress((prev) => ({ ...prev, validation: "complete", georeference: "active" }));
-      addLog(`GEOSPATIAL VALIDATION: PASSED. Verified CRS & Provenance sidecar for ${sceneName}`);
-    }, 400);
-
-    setTimeout(() => {
-      setStageProgress((prev) => ({ ...prev, georeference: "complete", tiling: 45 }));
-      addLog("SLIDING WINDOW TILING: Streaming windowed chips (256x256) under 4GB RAM ceiling");
-    }, 900);
-
-    setTimeout(() => {
-      setStageProgress((prev) => ({ ...prev, tiling: 100, quality: 70 }));
-      addLog("QUALITY GATING & INDICES: Calculated cloud mask, speckle CV, NDVI, NDWI, NDBI");
-    }, 1500);
-
-    setTimeout(() => {
-      setStageProgress((prev) => ({ ...prev, quality: 100, embedding: 60 }));
-      addLog("EMBEDDING GENERATION: Extracting 512-dim visual vectors (RemoteCLIP / Prithvi)");
-    }, 2200);
-
-    setTimeout(() => {
-      setStageProgress((prev) => ({ ...prev, embedding: 100, indexing: "active" }));
-      addLog("INDEXING: Incremental upsert into Qdrant Vector DB & SQLite metadata");
-    }, 2800);
-
-    setTimeout(() => {
-      setStageProgress((prev) => ({ ...prev, indexing: "complete" }));
-      addLog("SUCCESS: Ingestion live. Indexed tiles are immediately searchable in Workspace.");
-    }, 3400);
   };
+
+  const completeProcessing = () => setStageProgress({
+    validation: "complete",
+    georeference: "complete",
+    tiling: 100,
+    quality: 100,
+    embedding: 100,
+    indexing: "complete",
+  });
+
+  const failProcessing = () => setStageProgress({
+    validation: "pending",
+    georeference: "pending",
+    tiling: 0,
+    quality: 0,
+    embedding: 0,
+    indexing: "waiting",
+  });
 
   const handleSearchProvider = async () => {
     setIsSearchingProvider(true);
@@ -136,7 +157,7 @@ export default function IngestPage() {
     setMetrics(null);
     setCurrentFile(`${item.item_id}.tif`);
     addLog(`STAGING ${item.dataset_name} (${item.item_id}) INTO TERREX PIPELINE...`);
-    simulateProgress(item.item_id);
+    beginProcessing();
 
     try {
       await stageEOProviderScene(sourceType, item.item_id, item.bbox);
@@ -147,10 +168,12 @@ export default function IngestPage() {
         setMetrics(res.metrics);
         addLog(`SUCCESS: Staged & ingested ${res.metrics.tiles_created} tile(s). Vector store count: ${res.metrics.vector_index_count}.`);
       }
+      completeProcessing();
     } catch (err: any) {
-      addLog(`NOTICE: Running with staged offline mock: ${err?.message}`);
+      failProcessing();
+      addLog(`ERROR: Local provider staging failed: ${err?.message || "No locally staged scene is available."}`);
     } finally {
-      setTimeout(() => setIsProcessing(false), 3500);
+      setIsProcessing(false);
     }
   };
 
@@ -160,42 +183,30 @@ export default function IngestPage() {
     setMetrics(null);
     setCurrentFile("BATCH_INCOMING_GEOTIFFS.tif");
     addLog("INITIATING BATCH INGESTION FROM data/incoming/...");
-    simulateProgress("BATCH_INCOMING");
+    beginProcessing();
 
     try {
       const res = await processIncoming();
-      setMetrics(res.metrics || null);
-      addLog(`SUCCESS: Processed ${res.processed.length} scene(s).`);
-      if (res.metrics) addLog(`METRICS: ${res.metrics.tiles_created} created | ${res.metrics.tiles_skipped} skipped | ${res.metrics.tiles_discarded} discarded | ${res.metrics.elapsed_seconds}s`);
-      if (res.skipped?.length) addLog(`INCREMENTAL: Skipped ${res.skipped.length} already-indexed scene(s).`);
-      const repaired = (res.processed || []).filter((item: any) => item.status === "reindexed");
-      if (repaired.length) {
-        const total = repaired.reduce((sum: number, item: any) => sum + (item.reindexed_tiles || 0), 0);
-        addLog(`REPAIR: Rebuilt vector embeddings for ${total} persisted tile(s).`);
-      }
-      if (res.failed.length > 0) {
-        addLog(`WARNING: ${res.failed.length} scenes failed to process.`);
-        res.failed.forEach((f: any) => addLog(` -> ${f.file}: ${f.error}`));
-      }
-      if ((res.metrics?.vector_index_count ?? 0) > 0) addLog(`DATABASE INDEXING COMPLETE. Vector index count: ${res.metrics.vector_index_count}.`);
-      else addLog("WARNING: Ingestion completed but the vector index is still empty.");
+      setActiveJobId(res.job_id);
+      addLog(`JOB ${res.job_id.slice(0, 8)} STARTED: live telemetry is updating.`);
     } catch (err: any) {
+      failProcessing();
       addLog(`ERROR: Backend ingestion failed: ${err?.message || "The ingestion service is unavailable."}`);
     } finally {
-      setTimeout(() => setIsProcessing(false), 3500);
+      setIsProcessing(false);
     }
   };
 
-  const handleFileUpload = async (file: File) => {
+  const handleFileUpload = async (file: File, provenance: File) => {
     setIsProcessing(true);
     setLogs([]);
     setMetrics(null);
     setCurrentFile(file.name);
     addLog(`INITIATING UPLOAD & PIPELINE FOR: ${file.name}`);
-    simulateProgress(file.name);
+    beginProcessing();
 
     try {
-      const res = await uploadFileAndIngest(file);
+      const res = await uploadFileAndIngest(file, provenance);
       setMetrics({
         tiles_created: res.created_tiles ?? res.tiles ?? 0,
         tiles_skipped: res.skipped_tiles ?? 0,
@@ -206,10 +217,14 @@ export default function IngestPage() {
       addLog(`METRICS: ${res.skipped_tiles || 0} skipped | ${res.discarded_tiles || 0} discarded | ${res.elapsed_seconds || 0}s`);
       if ((res.index_size ?? 0) > 0) addLog(`DATABASE INDEXING COMPLETE. Vector index count: ${res.index_size}.`);
       else addLog("WARNING: Scene processing returned no vectors.");
+      completeProcessing();
+      setSelectedRaster(null);
+      setSelectedProvenance(null);
     } catch (err: any) {
+      failProcessing();
       addLog(`ERROR: Upload/ingestion failed: ${err?.message || "The ingestion service is unavailable."}`);
     } finally {
-      setTimeout(() => setIsProcessing(false), 3500);
+      setIsProcessing(false);
     }
   };
 
@@ -268,7 +283,7 @@ export default function IngestPage() {
               <p className="text-sm text-neutral-300 font-sans font-light leading-relaxed max-w-3xl">
                 Ingestion is fully live and incremental: As soon as tiles are indexed into Qdrant{" "}
                 <strong className="text-white font-semibold">
-                  (currently over {ingestStats?.vector_count ?? 1000}+ tiles and counting)
+                  (currently {ingestStats ? `${ingestStats.vector_count} indexed vectors` : "awaiting live telemetry"})
                 </strong>
                 , they are <span className="text-emerald-400 font-medium">immediately searchable and viewable on your map</span>. You can leave the indexing running in the background and use the search bar or map at any time.
               </p>
@@ -311,7 +326,9 @@ export default function IngestPage() {
           <div className="p-4 rounded-lg bg-neutral-950 border border-neutral-800 space-y-1">
             <span className="text-[10px] uppercase text-neutral-500 font-bold block">SCENES IN ARCHIVE</span>
             <span className="text-2xl font-black text-amber-400">{ingestStats?.scenes_count ?? 0}</span>
-            <span className="text-[10px] text-neutral-500 block font-sans">Sentinel-2 &amp; Sentinel-1</span>
+            <span className="text-[10px] text-neutral-500 block font-sans">
+              Sentinel-2 &amp; Sentinel-1{ingestStats?.quarantined_count ? ` · ${ingestStats.quarantined_count} rejected` : ""}
+            </span>
           </div>
 
           <div className="p-4 rounded-lg bg-neutral-950 border border-neutral-800 space-y-1">
@@ -358,7 +375,7 @@ export default function IngestPage() {
 
                     <div className="text-[10px] text-neutral-400 flex items-center justify-between font-sans">
                       <span>Date: {scene.acquisition_date ? scene.acquisition_date.slice(0, 10) : "N/A"}</span>
-                      <span className="text-emerald-400 font-mono font-semibold">Quality: {Math.round((scene.quality_score ?? 1) * 100)}%</span>
+                      <span className="text-emerald-400 font-mono font-semibold">Quality: {scene.quality_score == null ? "N/A" : `${Math.round(scene.quality_score * 100)}%`}</span>
                     </div>
                   </div>
 
@@ -453,7 +470,52 @@ export default function IngestPage() {
                     disabled={isProcessing}
                     onChange={(e) => {
                       const f = e.target.files?.[0];
-                      if (f) handleFileUpload(f);
+                      if (f) {
+                        setSelectedRaster(f);
+                        setSelectedProvenance(null);
+                        addLog(`SELECTED RASTER: ${f.name}. Select the matching ${f.name.replace(/\.(tif|tiff)$/i, "")}.provenance.json sidecar.`);
+                      }
+                    }}
+                  />
+                </div>
+
+                <div className="p-5 rounded-lg bg-neutral-950 border border-neutral-800 space-y-3">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-xs font-bold text-white uppercase tracking-wider">MANDATORY PROVENANCE SIDECAR</h3>
+                      <p className="text-[11px] text-neutral-400 font-sans mt-1">
+                        {selectedRaster
+                          ? `Expected: ${selectedRaster.name.replace(/\.(tif|tiff)$/i, "")}.provenance.json`
+                          : "Select a raster first. Runtime ingestion rejects scenes without traceable local provenance."}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => provenanceInputRef.current?.click()}
+                        disabled={!selectedRaster || isProcessing}
+                        className="px-4 py-2.5 bg-neutral-900 border border-neutral-700 text-white text-xs font-bold uppercase rounded disabled:opacity-40"
+                      >
+                        {selectedProvenance ? selectedProvenance.name : "SELECT JSON"}
+                      </button>
+                      <button
+                        onClick={() => selectedRaster && selectedProvenance && handleFileUpload(selectedRaster, selectedProvenance)}
+                        disabled={!selectedRaster || !selectedProvenance || isProcessing}
+                        className="px-4 py-2.5 bg-cyan-500 text-black text-xs font-bold uppercase rounded disabled:opacity-40"
+                      >
+                        INGEST PAIR
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    ref={provenanceInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    className="hidden"
+                    disabled={!selectedRaster || isProcessing}
+                    onChange={(e) => {
+                      const provenance = e.target.files?.[0] || null;
+                      setSelectedProvenance(provenance);
+                      if (provenance) addLog(`SELECTED PROVENANCE: ${provenance.name}`);
                     }}
                   />
                 </div>
@@ -492,19 +554,9 @@ export default function IngestPage() {
 
                   <div className="flex items-center gap-3 text-xs">
                     <span className="text-neutral-400 text-[11px]">TARGET AOI:</span>
-                    {(["kolkata", "delhi", "bengaluru"] as const).map((aoi) => (
-                      <button
-                        key={aoi}
-                        onClick={() => setSelectedIndianAoi(aoi)}
-                        className={`px-2.5 py-1 rounded text-[10px] uppercase font-bold tracking-wider transition-all ${
-                          selectedIndianAoi === aoi
-                            ? "bg-amber-500/20 border border-amber-500 text-amber-300"
-                            : "bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white"
-                        }`}
-                      >
-                        {aoi}
-                      </button>
-                    ))}
+                    <span className="px-2.5 py-1 rounded text-[10px] uppercase font-bold tracking-wider bg-amber-500/20 border border-amber-500 text-amber-300">
+                      GREATER KOLKATA / WEST BENGAL
+                    </span>
                     <button
                       onClick={handleSearchProvider}
                       disabled={isSearchingProvider}

@@ -115,6 +115,17 @@ def _ensure_ingestion_schema(engine):
         "change_results": {
             # Multi-evidence pipeline provenance, added with the evidence-fusion detector.
             "evidence_layers": "JSON", "pipeline_stages": "JSON",
+            "analysis_key": "VARCHAR",
+            "earliest_supported_observation": "TIMESTAMP",
+            "confirmed_observation": "TIMESTAMP",
+            "temporal_uncertainty_days": "FLOAT",
+            "persistence_status": "VARCHAR",
+            "persistence_log": "JSON",
+            "observations": "JSON",
+            "evidence": "JSON",
+            "registration": "JSON",
+            "dominant_change_type": "VARCHAR",
+            "dominant_dynamics": "VARCHAR",
         },
     }
     inspector = inspect(engine)

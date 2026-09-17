@@ -57,8 +57,8 @@ export default function ResultsList({
         {results.map((r, idx) => {
           const isSelected = r.tile_id === selectedTileId;
           const simPct = Math.round(r.similarity_score * 100);
-          const qualityPct = Math.round((r.quality_score ?? 0.94) * 100);
-          const cloudPct = Math.round((r.cloud_fraction ?? 0.03) * 100);
+          const qualityPct = r.quality_score == null ? null : Math.round(r.quality_score * 100);
+          const cloudPct = r.cloud_fraction == null ? null : Math.round(r.cloud_fraction * 100);
           const title = r.classification_label || (r.location_name ? `${r.location_name.toUpperCase()} REGION` : "CANDIDATE TARGET");
           const sub = r.location_name ?? r.scene_id;
           const thumb = r.thumbnail_path
@@ -128,11 +128,11 @@ export default function ResultsList({
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-500">QUALITY:</span>
-                    <span className="text-neutral-300 font-bold">{qualityPct}%</span>
+                    <span className="text-neutral-300 font-bold">{qualityPct == null ? "N/A" : `${qualityPct}%`}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-500">CLOUD:</span>
-                    <span className="text-neutral-300 font-bold">{cloudPct}%</span>
+                    <span className="text-neutral-300 font-bold">{cloudPct == null ? "N/A" : `${cloudPct}%`}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-neutral-500">SENSOR:</span>
@@ -143,7 +143,7 @@ export default function ResultsList({
                   <div className="flex justify-between col-span-2 pt-0.5 border-t border-neutral-800/50">
                     <span className="text-neutral-500">ACQUISITION:</span>
                     <span className="text-neutral-300">
-                      {r.acquisition_date?.slice(0, 10) ?? "2026-05-18"}
+                      {r.acquisition_date?.slice(0, 10) ?? "N/A"}
                     </span>
                   </div>
                 </div>

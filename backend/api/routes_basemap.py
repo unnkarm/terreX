@@ -68,32 +68,34 @@ async def get_basemap_tile(z: int, x: int, y: int):
             },
         )
 
-    # 2. If not cached, attempt live fetch & auto-cache if not strictly blocked
-    try:
-        import urllib.request
-        url = UPSTREAM_SATELLITE_URL.format(z=z, y=y, x=x)
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "TerreX-Offline-Basemap-Cache/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            if resp.status == 200:
-                data = resp.read()
-                if len(data) > 200:  # valid image payload
-                    tile_file.parent.mkdir(parents=True, exist_ok=True)
-                    temp_file = tile_file.with_suffix(".tmp")
-                    temp_file.write_bytes(data)
-                    temp_file.replace(tile_file)
-                    return Response(
-                        content=data,
-                        media_type="image/png",
-                        headers={
-                            "Cache-Control": "public, max-age=31536000, immutable",
-                            "X-TerreX-Tile-Source": "upstream-cached",
-                        },
-                    )
-    except Exception:
-        pass
+    # 2. Acquisition-time convenience only. Operational OFFLINE_MODE never
+    # attempts an outbound request for a cache miss.
+    if not settings.OFFLINE_MODE:
+      try:
+          import urllib.request
+          url = UPSTREAM_SATELLITE_URL.format(z=z, y=y, x=x)
+          req = urllib.request.Request(
+              url,
+              headers={"User-Agent": "TerreX-Offline-Basemap-Cache/1.0"},
+          )
+          with urllib.request.urlopen(req, timeout=3.0) as resp:
+              if resp.status == 200:
+                  data = resp.read()
+                  if len(data) > 200:  # valid image payload
+                      tile_file.parent.mkdir(parents=True, exist_ok=True)
+                      temp_file = tile_file.with_suffix(".tmp")
+                      temp_file.write_bytes(data)
+                      temp_file.replace(tile_file)
+                      return Response(
+                          content=data,
+                          media_type="image/png",
+                          headers={
+                              "Cache-Control": "public, max-age=31536000, immutable",
+                              "X-TerreX-Tile-Source": "upstream-cached",
+                          },
+                      )
+      except Exception:
+          pass
 
     # 3. Offline Fallback (returns dark tactical grid tile so MapLibre canvas remains unbroken)
     return Response(
@@ -134,4 +136,5 @@ def get_basemap_cache_status():
         "zoom_levels": sorted(list(zoom_levels)),
         "cache_directory": str(BASEMAP_TILES_DIR),
         "offline_ready": tile_count > 0,
+        "outbound_fetch_enabled": not settings.OFFLINE_MODE,
     }

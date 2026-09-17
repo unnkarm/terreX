@@ -19,7 +19,7 @@ import time
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Dict, Tuple
+from typing import Any, Optional, Dict, Tuple, Callable
 
 import numpy as np
 import rasterio
@@ -287,10 +287,12 @@ def _reindex_existing_scene(scene_id: str) -> int:
                 vector_store.upsert_tile(
                     tile_id=tile.tile_id,
                     vector=emb.vector,
-                    payload={
+                    sensor=tile.sensor or "Unknown",
+                    acquisition_date=tile.acquisition_date.isoformat() if tile.acquisition_date else None,
+                    lon=float(tile.lon),
+                    lat=float(tile.lat),
+                    extra_payload={
                         "scene_id": str(tile.scene_id),
-                        "lon": float(tile.lon), "lat": float(tile.lat), "sensor": tile.sensor,
-                        "acquisition_date": tile.acquisition_date.isoformat() if tile.acquisition_date else None,
                         "quality_score": float(tile.quality_score or 0.0),
                         "cloud_fraction": float(tile.cloud_fraction or 0.0),
                         "thumbnail_path": tile.thumbnail_path,
@@ -301,6 +303,7 @@ def _reindex_existing_scene(scene_id: str) -> int:
                 reindexed += 1
             except Exception as exc:
                 logger.exception("Failed to reindex tile %s: %s", tile.tile_id, exc)
+        session.commit()
     return reindexed
 
 
@@ -353,7 +356,7 @@ def _compute_tile_bounds_wgs84(
     return float(min_lon), float(min_lat), float(max_lon), float(max_lat), float(center_lon), float(center_lat)
 
 
-def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
+def ingest_file(path: Path, move_to_scenes: bool = True, progress: Optional[Callable[[str, int, int], None]] = None) -> dict:
     """
     Ingest a single GeoTIFF/COG file end-to-end with streaming windowed reads.
     Returns a summary dict. Quarantines invalid scenes for full auditability.
@@ -410,6 +413,27 @@ def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
                 bounds_wgs84 = transform_bounds(effective_crs, "EPSG:4326", min_x, min_y, max_x, max_y)
             else:
                 bounds_wgs84 = (min_x, min_y, max_x, max_y)
+        operational_bounds = (
+            settings.KOLKATA_AOI_MIN_LON,
+            settings.KOLKATA_AOI_MIN_LAT,
+            settings.KOLKATA_AOI_MAX_LON,
+            settings.KOLKATA_AOI_MAX_LAT,
+        )
+        # Satellite scenes commonly cover a larger footprint than the analyst's
+        # AOI. Keep any scene that intersects Greater Kolkata; downstream tiles
+        # retain their exact geometry for spatial filtering.
+        if (
+            bounds_wgs84[2] < operational_bounds[0]
+            or bounds_wgs84[0] > operational_bounds[2]
+            or bounds_wgs84[3] < operational_bounds[1]
+            or bounds_wgs84[1] > operational_bounds[3]
+        ):
+            reason = (
+                f"Scene footprint {tuple(round(float(v), 6) for v in bounds_wgs84)} does not intersect "
+                f"the configured Greater Kolkata / West Bengal boundary {operational_bounds}"
+            )
+            _record_quarantine(path, reason)
+            raise IngestionError(reason)
         footprint = box(*bounds_wgs84)
         resolution_m = float(provenance_data.get("resolution_m") or abs(effective_transform.a))
 
@@ -423,6 +447,12 @@ def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
             logger.warning("Retained scene %s is not fully COG-structured: %s", final_path.name, cog_info)
 
         with get_session() as session:
+            # A prior run may have quarantined this same file under the former
+            # fully-contained-footprint rule. Replace that stale audit entry.
+            session.query(Scene).filter(
+                Scene.source_filename == path.name,
+                Scene.status == "quarantined",
+            ).delete(synchronize_session=False)
             scene = Scene(
                 source_filename=path.name,
                 source_path=str(final_path),
@@ -456,6 +486,7 @@ def ingest_file(path: Path, move_to_scenes: bool = True) -> dict:
                 scene=scene,
                 session=session,
                 band_map=band_map,
+                progress=progress,
             )
 
             # Update scene-level aggregated quality
@@ -498,6 +529,7 @@ def _tile_and_index_windowed(
     scene: Scene,
     session,
     band_map: Dict[str, int],
+    progress: Optional[Callable[[str, int, int], None]] = None,
 ) -> dict:
     ts = settings.TILE_SIZE
     overlap = settings.TILE_OVERLAP
@@ -512,6 +544,10 @@ def _tile_and_index_windowed(
     discard_reasons: Dict[str, int] = {}
     total_cloud = 0.0
     total_quality = 0.0
+    planned = sum(1 for row in range(0, dataset.height, step) for col in range(0, dataset.width, step) if min(ts, dataset.height - row) >= ts // 2 and min(ts, dataset.width - col) >= ts // 2)
+    completed = 0
+    if progress:
+        progress("tiling", 0, planned)
 
     for row in range(0, dataset.height, step):
         for col in range(0, dataset.width, step):
@@ -519,11 +555,14 @@ def _tile_and_index_windowed(
             tile_h = min(ts, dataset.height - row)
             if tile_h < ts // 2 or tile_w < ts // 2:
                 continue
+            completed += 1
 
             window = Window(col_off=col, row_off=row, width=tile_w, height=tile_h)
             deterministic_id = _deterministic_tile_id(str(scene.source_hash or scene.scene_id), row, col, scene.acquisition_date)
             if session.query(Tile.tile_id).filter(Tile.tile_id == deterministic_id).first():
                 skipped += 1
+                if progress:
+                    progress("tiling", completed, planned)
                 continue
 
             rgb_patch = _read_tile_rgb_float(dataset, window, band_map)
@@ -535,10 +574,14 @@ def _tile_and_index_windowed(
             patch_valid = float(valid_pixel_fraction(bands_data, dataset.nodata))
             patch_sharp = float(sharpness_score(rgb_patch.mean(axis=-1)))
             patch_quality = float(overall_quality_score(patch_cloud, patch_valid, patch_sharp))
+            if progress:
+                progress("quality", completed, planned)
             if patch_clear < MIN_USABLE_FRACTION:
                 discarded += 1
                 for reason in quality_summary.get("confounds", ["low_clear_fraction"]):
                     discard_reasons[reason] = discard_reasons.get(reason, 0) + 1
+                if progress:
+                    progress("tiling", completed, planned)
                 continue
 
             radiometric_stats = {"band_means": bands_data.mean(axis=(1, 2)).round(6).tolist(), "band_stds": bands_data.std(axis=(1, 2)).round(6).tolist()}
@@ -624,6 +667,9 @@ def _tile_and_index_windowed(
             count += 1
             total_cloud += patch_cloud
             total_quality += patch_quality
+            if progress:
+                progress("embedding", completed, planned)
+                progress("tiling", completed, planned)
 
     avg_cloud = total_cloud / max(count, 1)
     avg_quality = total_quality / max(count, 1)

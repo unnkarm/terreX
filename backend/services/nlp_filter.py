@@ -125,8 +125,12 @@ def get_gliner_model():
             warnings.simplefilter("ignore")
             try:
                 from gliner import GLiNER
+                from config import settings
+                local_model = settings.MODEL_DIR / "gliner" / "gliner_small-v2.1"
+                if not local_model.exists():
+                    raise FileNotFoundError(f"Local GLiNER model is not staged at {local_model}")
                 t0 = time.perf_counter()
-                _gliner_model = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
+                _gliner_model = GLiNER.from_pretrained(str(local_model), local_files_only=True)
                 logger.info(f"GLiNER zero-shot NER model initialized in {time.perf_counter()-t0:.2f}s")
             except Exception as e:
                 logger.warning(f"Failed to load GLiNER model ({e}). Will use fallback regex/geocoder parser.")

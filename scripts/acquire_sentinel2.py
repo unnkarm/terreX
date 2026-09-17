@@ -21,22 +21,15 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 try:
-    from acquisition_common import acquire_from_copernicus, DEFAULT_BBOX, resolve_bbox
+    from acquisition_common import acquire_from_copernicus, dense_revisit_windows, resolve_bbox
 except ImportError:
-    from scripts.acquisition_common import acquire_from_copernicus, DEFAULT_BBOX, resolve_bbox  # type: ignore
+    from scripts.acquisition_common import acquire_from_copernicus, dense_revisit_windows, resolve_bbox  # type: ignore
 
 # ---------------------------------------------------------------------------
-# Target date windows — one scene per quarter ensures temporal diversity
-# for the 6-pass "Military Time Machine" demo (PS requirement §2.2.2)
+# Target date windows — default to most recent clear season (2026)
+# Dense 5-day cadence ensures temporal diversity for the time-series demo
 # ---------------------------------------------------------------------------
-_SENTINEL2_DATE_RANGES: List[tuple] = [
-    ("2024-01-01", "2024-04-30"),
-    ("2024-06-01", "2024-09-30"),
-    ("2024-10-01", "2024-12-31"),
-    ("2025-01-01", "2025-04-30"),
-    ("2025-07-01", "2025-10-31"),
-    ("2025-11-01", "2026-03-31"),
-]
+_SENTINEL2_DATE_RANGES: List[tuple] = dense_revisit_windows("2026-01-01", "2026-04-30", 5)
 
 _OUTPUT_DIR = Path(__file__).parents[1] / "data" / "incoming" / "sentinel2"
 
@@ -62,6 +55,7 @@ def acquire_sentinel2(
 
 
 import argparse
+from datetime import datetime, timedelta
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -87,9 +81,55 @@ if __name__ == "__main__":
         default=None,
         help="Custom bounding box coordinates",
     )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="Start date (YYYY-MM-DD), default: 2026-01-01",
+    )
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        help="End date (YYYY-MM-DD), default: 2026-04-30",
+    )
+    parser.add_argument(
+        "--cadence-days",
+        type=int,
+        default=5,
+        help="Revisit window size in days (default: 5)",
+    )
+    parser.add_argument(
+        "--cloud-cover-max",
+        type=float,
+        default=20.0,
+        help="Maximum cloud cover percentage (default: 20.0)",
+    )
+    parser.add_argument(
+        "--days-back",
+        type=int,
+        default=None,
+        help="Acquire scenes from the last N days up to today",
+    )
     args = parser.parse_args()
 
-    result = acquire_sentinel2(region=args.region, bbox=args.bbox)
+    date_ranges = None
+    if args.days_back:
+        end_d = datetime.now().date()
+        start_d = end_d - timedelta(days=args.days_back)
+        date_ranges = dense_revisit_windows(start_d.isoformat(), end_d.isoformat(), args.cadence_days)
+    elif args.start_date and args.end_date:
+        date_ranges = dense_revisit_windows(args.start_date, args.end_date, args.cadence_days)
+    elif args.start_date:
+        end_d = datetime.now().date().isoformat()
+        date_ranges = dense_revisit_windows(args.start_date, end_d, args.cadence_days)
+
+    result = acquire_sentinel2(
+        region=args.region,
+        bbox=args.bbox,
+        date_ranges=date_ranges,
+        cloud_cover_max=args.cloud_cover_max,
+    )
     covered = result["downloaded"]
     if covered < 3:
         print(

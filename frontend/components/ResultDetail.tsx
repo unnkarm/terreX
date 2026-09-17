@@ -130,9 +130,8 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
   };
 
   const sendFeedback = async (verdict: "confirm" | "reject") => {
-    const targetType = change?.change_id ? "change_result" : "tile";
-    const targetId = change?.change_id ?? result.tile_id;
-    await submitFeedback(targetType, targetId, verdict, analystNote.trim() || undefined);
+    if (!change?.change_id) return;
+    await submitFeedback("change_result", change.change_id, verdict, analystNote.trim() || undefined);
     setFeedbackSent(verdict);
   };
 
@@ -155,7 +154,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
     },
     {
       key: "change",
-      label: "Bitemporal Change",
+      label: "Dense Change Point",
       icon: (
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -181,7 +180,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
         </svg>
       ),
-      badge: changeReady ? `${Math.round((change?.confidence ?? 0.8) * 100)}%` : undefined,
+      badge: changeReady && change?.confidence != null ? `${Math.round(change.confidence * 100)}%` : undefined,
     },
     {
       key: "timeline",
@@ -426,7 +425,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                   </button>
                 </div>
 
-                {/* Primary Action: Run Bitemporal Change Analysis */}
+                {/* Primary Action: Run dense time-series change analysis */}
                 <button
                   onClick={runChangeDetection}
                   disabled={loading}
@@ -435,10 +434,10 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                   {loading ? (
                     <>
                       <span className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                      <span>PROCESSING BITEMPORAL SCENES...</span>
+                      <span>PROCESSING DENSE TIME SERIES...</span>
                     </>
                   ) : (
-                    "EXECUTE BITEMPORAL ANALYSIS"
+                    "EXECUTE CHANGE-POINT ANALYSIS"
                   )}
                 </button>
 
@@ -465,6 +464,14 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                 </div>
               )}
 
+              {change && (change.status === "no_change" || change.status === "transient_only") && (
+                <div className="p-3 rounded bg-cyan-950/30 border border-cyan-800/60 text-cyan-300 font-mono text-[11px] space-y-1">
+                  <div className="font-bold uppercase">{change.status.replace(/_/g, " ")}</div>
+                  <div>{change.message}</div>
+                  <div className="text-neutral-400">The candidate was not added to the confirmed review queue.</div>
+                </div>
+              )}
+
               {change && change.status === "ok" && (
                 <div className="space-y-3">
                   {/* Matched Observations Strip */}
@@ -476,10 +483,10 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                     <span className="text-neutral-400">
                       T1: <strong className="text-emerald-400">{change.after?.acquisition_date?.slice(0, 10) ?? dateTo}</strong>
                     </span>
-                    <span className="text-neutral-500 font-bold">({change.observations?.length ?? 2} Passes)</span>
+                    <span className="text-neutral-500 font-bold">({change.observations?.length ?? 0} Passes)</span>
                   </div>
 
-                  {/* Bitemporal Comparison Slider */}
+                  {/* Baseline-to-onset comparison slider */}
                   <BeforeAfterSlider
                     beforeImg={
                       change.before?.thumbnail_url ?? change.before?.thumbnail_path ?? result.thumbnail_path ?? result.tile_id
@@ -521,10 +528,12 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                   <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded bg-emerald-950/25 border border-emerald-800/50 text-[10px] font-mono">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0 shadow-[0_0_6px_#34d399]" />
-                      <span className="text-emerald-400 font-bold truncate">CO-REGISTRATION: SUB-PIXEL FFT</span>
+                      <span className="text-emerald-400 font-bold truncate">CO-REGISTRATION: {change.registration?.inliers ? "ORB/RANSAC" : "PHASE CORRELATION"}</span>
                     </div>
                     <span className="text-neutral-300 font-mono text-[9px] px-1.5 py-0.5 rounded bg-black/60 border border-emerald-800/60 flex-shrink-0 whitespace-nowrap">
-                      {change.registration?.is_aligned ? "RESIDUAL: ±0.42 PX (ALIGNED)" : "RESIDUAL: SHIFT DETECTED"}
+                      {change.registration
+                        ? `ΔX ${change.registration.dx.toFixed(2)} PX · ΔY ${change.registration.dy.toFixed(2)} PX · CORR ${(change.registration.correlation_after * 100).toFixed(1)}%`
+                        : "REGISTRATION METRICS UNAVAILABLE"}
                     </span>
                   </div>
                 </div>
@@ -639,7 +648,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
 
               {!changeReady && (
                 <div className="p-3 rounded bg-neutral-900/40 border border-neutral-800 text-neutral-500 font-mono text-[10px] text-center">
-                  Spectral deltas and connected regions will appear once Bitemporal Analysis is executed.
+                  Spectral deltas and connected regions will appear after a persisted change is confirmed.
                 </div>
               )}
             </div>
@@ -669,7 +678,10 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
               <SectionHeader title="MULTI-TEMPORAL OBSERVATION TIMELINE" badge="TIME SERIES" />
               <ChangeTimeline
                 earliestDate={change?.earliest_supported_observation?.slice(0, 10)}
-                registrationConfidence={change?.registration?.correlation_after != null ? Math.round(change.registration.correlation_after * 100) : 96}
+                confirmedDate={change?.confirmed_observation?.slice(0, 10)}
+                uncertaintyDays={change?.temporal_uncertainty_days}
+                persistenceStatus={change?.persistence?.status ?? change?.status}
+                registrationConfidence={change?.registration?.correlation_after != null ? Math.round(change.registration.correlation_after * 100) : undefined}
                 observations={change?.observations}
               />
             </div>
@@ -692,6 +704,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => sendFeedback("confirm")}
+                    disabled={!change?.change_id}
                     className={`py-2 rounded font-mono font-bold text-xs uppercase transition-all flex items-center justify-center gap-1.5 ${
                       feedbackSent === "confirm"
                         ? "bg-emerald-600 text-white shadow-[0_0_15px_rgba(16,185,129,0.5)]"
@@ -704,6 +717,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
 
                   <button
                     onClick={() => sendFeedback("reject")}
+                    disabled={!change?.change_id}
                     className={`py-2 rounded font-mono font-bold text-xs uppercase transition-all flex items-center justify-center gap-1.5 ${
                       feedbackSent === "reject"
                         ? "bg-red-600 text-white shadow-[0_0_15px_rgba(239,68,68,0.5)]"
