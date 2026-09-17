@@ -1,27 +1,31 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from typing import Literal
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from db.database import get_db
-from db.models import Feedback
+from db.models import ChangeResult, Feedback, Tile
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
 
 class FeedbackIn(BaseModel):
-    target_type: str  # "tile" | "change_result"
+    target_type: Literal["tile", "change_result"]
     target_id: str
-    verdict: str      # "confirm" | "reject"
+    verdict: Literal["confirm", "reject"]
     analyst: str | None = None
     note: str | None = None
 
 
 @router.post("")
 def submit_feedback(payload: FeedbackIn, db: Session = Depends(get_db)):
-    fb = Feedback(**payload.dict())
+    target_model = Tile if payload.target_type == "tile" else ChangeResult
+    if db.get(target_model, payload.target_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown {payload.target_type} target: {payload.target_id}")
+    fb = Feedback(**payload.model_dump())
     db.add(fb)
     db.commit()
     db.refresh(fb)

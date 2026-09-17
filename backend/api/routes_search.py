@@ -9,11 +9,57 @@ import numpy as np
 from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException, Body
 from PIL import Image
 
+from config import settings
 from services.search import semantic_text_search, image_to_image_search
 from services.nlp_filter import parse_natural_language_query
 
 logger = logging.getLogger("terrex.api.search")
 router = APIRouter(prefix="/api/search", tags=["search"])
+
+
+def _operational_bbox(values) -> tuple[float, float, float, float]:
+    bounds = (
+        settings.KOLKATA_AOI_MIN_LON,
+        settings.KOLKATA_AOI_MIN_LAT,
+        settings.KOLKATA_AOI_MAX_LON,
+        settings.KOLKATA_AOI_MAX_LAT,
+    )
+    supplied = [value is not None for value in values]
+    if any(supplied) and not all(supplied):
+        raise HTTPException(status_code=422, detail="All four AOI bounds must be supplied together")
+    if not any(supplied):
+        return bounds
+    min_lon, min_lat, max_lon, max_lat = (float(value) for value in values)
+    if not (
+        bounds[0] <= min_lon < max_lon <= bounds[2]
+        and bounds[1] <= min_lat < max_lat <= bounds[3]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=f"AOI must stay inside Greater Kolkata / West Bengal bounds {bounds}; max longitude is {bounds[2]:.2f}E",
+        )
+    return min_lon, min_lat, max_lon, max_lat
+
+
+def _validate_operational_polygon(polygon: Any) -> None:
+    if polygon is None:
+        return
+    coordinates = polygon.get("coordinates") if isinstance(polygon, dict) else polygon
+    points: list[tuple[float, float]] = []
+
+    def visit(value):
+        if isinstance(value, (list, tuple)) and len(value) >= 2 and all(isinstance(v, (int, float)) for v in value[:2]):
+            points.append((float(value[0]), float(value[1])))
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                visit(child)
+
+    visit(coordinates)
+    if not points:
+        raise HTTPException(status_code=422, detail="AOI polygon contains no valid coordinates")
+    bounds = _operational_bbox((None, None, None, None))
+    if any(not (bounds[0] <= lon <= bounds[2] and bounds[1] <= lat <= bounds[3]) for lon, lat in points):
+        raise HTTPException(status_code=422, detail=f"AOI polygon must stay inside operational bounds {bounds}")
 
 
 class TextSearchRequest(BaseModel):
@@ -137,16 +183,15 @@ def search_text(
     max_lat: Optional[float] = None,
     polygon: Optional[str] = Query(None, description="GeoJSON polygon or coordinates JSON"),
 ):
-    aoi_bbox = None
-    if None not in (min_lon, min_lat, max_lon, max_lat):
-        aoi_bbox = (min_lon, min_lat, max_lon, max_lat)
+    aoi_bbox = _operational_bbox((min_lon, min_lat, max_lon, max_lat))
     
     aoi_poly = None
     if polygon:
         try:
             aoi_poly = json.loads(polygon)
         except Exception:
-            pass
+            raise HTTPException(status_code=422, detail="polygon must be valid JSON")
+    _validate_operational_polygon(aoi_poly)
 
     if sensor and sensor.lower().strip() in ("all", "all sensors", "all_sensors", "", "none"):
         sensor = None
@@ -160,9 +205,8 @@ def search_text(
 @router.post("/text")
 def search_text_post(req: TextSearchRequest = Body(...)):
     """POST JSON endpoint for text search with arbitrary GeoJSON polygon filter."""
-    aoi_bbox = None
-    if None not in (req.min_lon, req.min_lat, req.max_lon, req.max_lat):
-        aoi_bbox = (req.min_lon, req.min_lat, req.max_lon, req.max_lat)
+    aoi_bbox = _operational_bbox((req.min_lon, req.min_lat, req.max_lon, req.max_lat))
+    _validate_operational_polygon(req.aoi_polygon)
 
     sensor = req.sensor
     if sensor and sensor.lower().strip() in ("all", "all sensors", "all_sensors", "", "none"):
@@ -198,16 +242,15 @@ async def search_image(
         contents = await file.read()
         image = decode_image_bytes(contents)
         
-        aoi_bbox = None
-        if None not in (min_lon, min_lat, max_lon, max_lat):
-            aoi_bbox = (min_lon, min_lat, max_lon, max_lat)
+        aoi_bbox = _operational_bbox((min_lon, min_lat, max_lon, max_lat))
 
         aoi_poly = None
         if polygon:
             try:
                 aoi_poly = json.loads(polygon)
             except Exception:
-                pass
+                raise HTTPException(status_code=422, detail="polygon must be valid JSON")
+        _validate_operational_polygon(aoi_poly)
 
         if sensor and sensor.lower().strip() in ("all", "all sensors", "all_sensors", "", "none"):
             sensor = None
@@ -224,4 +267,3 @@ async def search_image(
             status_code=500,
             detail=f"Image search failed: {str(exc)}",
         )
-
