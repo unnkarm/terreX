@@ -72,6 +72,8 @@ export interface ChangeObservation {
   quality_score: number;
   thumbnail_url: string;
   distance_from_baseline: number;
+  /** Weighted share of evidence layers that agreed on this pass. */
+  evidence_agreement?: number;
   mean_ndvi: number;
   mean_ndwi: number;
   mean_ndbi: number;
@@ -97,7 +99,81 @@ export interface EvidenceBundle {
   registration_aligned: boolean;
   cloud_fraction: number;
   radiometric_diff: number;
+  /** Weighted agreement between independent evidence layers inside the detection. */
+  evidence_agreement?: number;
+  /** Share of the tile usable in both dates after cloud/shadow/nodata masking. */
+  clear_fraction?: number;
+  changed_area_fraction?: number;
+  deep_layer_available?: boolean;
+  deep_layer_is_placeholder?: boolean;
+  spectral_is_multispectral?: boolean;
   items: EvidenceCheckItem[];
+}
+
+/** One independent line of evidence in the fused change detector. */
+export interface EvidenceLayerSummary {
+  name: "deep_feature" | "spectral" | "spatial_context" | string;
+  weight: number;
+  /** How far this layer can be trusted for this specific observation pair. */
+  reliability: number;
+  effective_weight: number;
+  mean_probability: number;
+  p95_probability: number;
+  changed_fraction: number;
+  detail: string;
+  stats: Record<string, any>;
+}
+
+/** Ordered audit of the stages the change pipeline ran. */
+export interface PipelineStageInfo {
+  stage: string;
+  status: "ok" | "degraded" | "skipped";
+  detail: string;
+  metrics: Record<string, any>;
+}
+
+export interface QualityMaskSummary {
+  method: string;
+  clear_fraction: number;
+  cloud_fraction: number;
+  shadow_fraction: number;
+  nodata_fraction: number;
+  dilation_px: number;
+  notes: string[];
+}
+
+export interface NormalizationSummary {
+  method: "pif-linear" | "histogram-match" | "identity" | string;
+  gains: number[];
+  offsets: number[];
+  pif_fraction: number;
+  shift_before: number;
+  shift_after: number;
+  detail: string;
+}
+
+export interface FusionSummary {
+  layers: string[];
+  weights: Record<string, number>;
+  contributions: Record<string, number>;
+  mean_agreement: number;
+  corroboration_floor: number;
+  detail: string;
+}
+
+export interface SuppressionStage {
+  stage: string;
+  detail: string;
+  pixels_before: number;
+  pixels_after: number;
+  pixels_removed: number;
+}
+
+export interface SuppressionSummary {
+  stages: SuppressionStage[];
+  changed_pixels: number;
+  changed_fraction: number;
+  removed_fraction: number;
 }
 
 export interface ConfoundItem {
@@ -121,6 +197,8 @@ export interface ChangeRegionItem {
   mean_d_ndbi: number;
   elongation: number;
   rationale: string;
+  /** Mean response of each evidence layer inside this region, plus their agreement. */
+  evidence?: Record<string, number>;
 }
 
 export interface ChangeDetectionResponse {
@@ -145,10 +223,28 @@ export interface ChangeDetectionResponse {
   earliest_supported_observation?: string;
   observations?: ChangeObservation[];
   evidence?: EvidenceBundle;
+  /** Per-layer breakdown of the fused multi-evidence detector. */
+  evidence_layers?: EvidenceLayerSummary[];
+  fusion?: FusionSummary;
+  masking?: {
+    before: QualityMaskSummary;
+    after: QualityMaskSummary;
+    joint_clear_fraction: number;
+  };
+  normalization?: NormalizationSummary;
+  suppression?: SuppressionSummary;
+  pipeline?: {
+    version: string;
+    threshold: number;
+    stages: PipelineStageInfo[];
+  };
   confidence_breakdown?: {
     raw_change_score: number;
     post_suppression_change_score: number;
     combined_optical_quality: number;
+    evidence_agreement?: number | null;
+    evidence_layers?: EvidenceLayerSummary[];
+    clear_fraction?: number | null;
     final_confidence: number;
     is_high_certainty: boolean;
     confounds: ConfoundItem[];
@@ -161,6 +257,8 @@ export interface ChangeDetectionResponse {
     inliers: number;
     dx: number;
     dy: number;
+    /** Misalignment still measurable after warping — the honest geometry check. */
+    residual_shift_px?: number;
   };
   change_regions?: ChangeRegionItem[];
   suppression_reasons?: string[];

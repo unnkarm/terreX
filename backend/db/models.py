@@ -154,6 +154,11 @@ class ChangeResult(Base):
     method = Column(String, nullable=False)
     is_placeholder_model = Column(Boolean, default=False)
 
+    # Multi-evidence provenance: what each independent evidence layer
+    # contributed, and the ordered audit of every pipeline stage that ran.
+    evidence_layers = Column(JSON, nullable=True)
+    pipeline_stages = Column(JSON, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

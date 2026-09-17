@@ -83,6 +83,20 @@ class Settings:
     MIN_QUALITY_SCORE: float = float(os.getenv("MIN_QUALITY_SCORE", "0.4"))
     CHANGE_PROB_THRESHOLD: float = float(os.getenv("CHANGE_PROB_THRESHOLD", "0.5"))
 
+    # --- Multi-evidence change pipeline (Feature 4) --------------------------
+    # Prior weight of each independent evidence layer before it is scaled by
+    # that layer's reliability for the observation pair at hand. They need not
+    # sum to 1 — fusion normalises by the total effective weight.
+    W_EVIDENCE_DEEP: float = float(os.getenv("W_EVIDENCE_DEEP", "0.45"))
+    W_EVIDENCE_SPECTRAL: float = float(os.getenv("W_EVIDENCE_SPECTRAL", "0.35"))
+    W_EVIDENCE_SPATIAL: float = float(os.getenv("W_EVIDENCE_SPATIAL", "0.20"))
+    # Window radius (px) for spatial/context consistency and corroboration.
+    CHANGE_CONTEXT_RADIUS: int = int(os.getenv("CHANGE_CONTEXT_RADIUS", "3"))
+    # Smallest connected component kept as a real change region.
+    CHANGE_MIN_REGION_PIXELS: int = int(os.getenv("CHANGE_MIN_REGION_PIXELS", "8"))
+    # Radius (px) by which cloud/shadow masks are grown to catch their haloes.
+    CLOUD_MASK_DILATION: int = int(os.getenv("CLOUD_MASK_DILATION", "2"))
+
     CORS_ORIGINS: list = os.getenv("CORS_ORIGINS", "*").split(",")
 
 

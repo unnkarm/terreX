@@ -2,11 +2,22 @@
 Feature 4 — Multi-temporal change analysis & classification.
 
 AOI + start date + end date -> query candidate tiles strictly within date window
--> filter usable observations -> co-register pairs (homography/affine)
--> relative radiometric normalization -> feature extraction / Siamese diffing
--> Layer-1 change mask -> Layer-2 change typing (Construction, Clearance, Water, Road)
--> False-alarm suppression & temporal consistency -> earliest supported observation
--> ChangeResult persistence with complete geospatial & processing provenance.
+-> filter usable observations -> run the multi-evidence change pipeline
+(services.algorithms.pipeline) over the selected before/after pair:
+
+    Registration -> radiometric normalization -> cloud/quality masking
+    -> Prithvi EO features -> deep feature difference
+    -> spectral differences -> spatial/context consistency
+    -> evidence fusion -> false-alarm suppression
+    -> change mask -> change type -> confidence
+
+-> corroborate across the rest of the observation stack -> scene-level
+false-alarm scoring -> earliest supported observation -> ChangeResult
+persistence with complete geospatial & processing provenance.
+
+This module owns the database, file and API concerns only. Every array
+operation lives in services.algorithms, which is importable and testable
+without a database.
 """
 from __future__ import annotations
 
@@ -14,10 +25,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-try:
-    import cv2
-except ImportError:
-    cv2 = None
 import numpy as np
 from PIL import Image
 from sqlalchemy import select, and_
@@ -26,15 +33,21 @@ from config import settings
 from db.database import get_session
 from db.models import Tile, ChangeResult
 from services.prithvi import prithvi_service
-from services.quality import (
-    cloud_fraction_estimate, valid_pixel_fraction, sharpness_score,
-    overall_quality_score,
-)
+from services.quality import valid_pixel_fraction, sharpness_score
 from services.false_alarm import evaluate, ObservationQuality
-from services.algorithms.registration import register_image_pair, RegistrationResult
-from services.algorithms.normalization import normalize_histogram_match
-from services.algorithms.spectral import compute_spectral_indices, compute_spectral_deltas, SpectralIndices
-from services.algorithms.change_classifier import classify_change_regions, ChangeRegion
+from services.algorithms.pipeline import (
+    PIPELINE_VERSION,
+    ChangeAnalysis,
+    Observation,
+    analyze_change_pair,
+)
+from services.algorithms.spectral import compute_spectral_indices, SpectralIndices
+from services.algorithms.change_classifier import ChangeRegion
+from services.algorithms.evidence import deep_feature_difference
+
+# Beyond this many observations the corroboration pass stops running the full
+# pipeline per date; the timeline itself is still built from every observation.
+MAX_CORROBORATION_PASSES = 12
 
 
 def _load_tile_rgb_chw(tile: Tile) -> np.ndarray:
@@ -83,6 +96,44 @@ def _load_precomputed_indices(tile: Tile) -> Optional[SpectralIndices]:
     return None
 
 
+def _load_observation(tile: Tile) -> Observation:
+    """
+    Build a pipeline Observation from a tile, carrying every ancillary plane
+    the tile pack has: the raw scene-classification band (unscaled, so its
+    class codes survive), the ingest-time quality mask, and the precomputed
+    spectral indices.
+    """
+    raster, band_map = _load_tile_multispectral_or_rgb(tile)
+    scl: Optional[np.ndarray] = None
+    ingest_mask: Optional[np.ndarray] = None
+
+    npz_path = Path(tile.tile_path).with_suffix(".npz")
+    if npz_path.exists():
+        try:
+            data = np.load(npz_path, allow_pickle=True)
+            if "quality_mask" in data:
+                ingest_mask = np.asarray(data["quality_mask"]).astype(bool)
+            stored_map = data["band_map"].item() if "band_map" in data else {}
+            scl_index = stored_map.get("scl") if isinstance(stored_map, dict) else None
+            if scl_index is not None and "bands" in data:
+                raw_bands = data["bands"]
+                if 0 <= int(scl_index) < raw_bands.shape[0]:
+                    # Read before any [0, 1] rescaling — SCL carries class codes,
+                    # not reflectance, and dividing by 10000 would destroy them.
+                    scl = np.asarray(raw_bands[int(scl_index)])
+        except Exception:
+            pass
+
+    return Observation(
+        raster=raster,
+        band_map=band_map,
+        scl=scl,
+        ingest_mask=ingest_mask,
+        indices=_load_precomputed_indices(tile),
+        label=tile.acquisition_date.strftime("%Y-%m-%d") if tile.acquisition_date else str(tile.tile_id),
+    )
+
+
 def _prepare_prithvi_input(raster: np.ndarray, band_map: Optional[Dict[str, int]]) -> Optional[np.ndarray]:
     """Arrange TerreX multispectral data into Prithvi's six-band input order."""
     if not band_map:
@@ -90,7 +141,7 @@ def _prepare_prithvi_input(raster: np.ndarray, band_map: Optional[Dict[str, int]
     required = ("blue", "green", "red", "nir", "swir1")
     if any(name not in band_map or band_map[name] >= raster.shape[-1] for name in required):
         return None
-    
+
     bands = [raster[..., band_map[name]] for name in required]
     if "swir2" in band_map and band_map["swir2"] < raster.shape[-1]:
         bands.append(raster[..., band_map["swir2"]])
@@ -116,57 +167,33 @@ def _tile_has_prithvi_bands(tile: Tile) -> bool:
         return False
 
 
+def _to_rgb_chw(raster: np.ndarray) -> np.ndarray:
+    """Three-channel CHW view of a raster, for the non-six-band Prithvi path."""
+    return np.transpose(raster[..., : min(3, raster.shape[-1])], (2, 0, 1))
+
+
 def _difference_to_change_map(before_feat: np.ndarray, after_feat: np.ndarray) -> np.ndarray:
     """
-    Swappable change detection head.
-    Computes per-patch L2 feature distance, min-max normalized to 0..1.
-    Gracefully handles dimension and channel mismatches between feature maps.
+    Deep-feature change head.
+
+    Kept as the single-layer view of the deep evidence: per-patch cosine
+    distance blended with relative activation-magnitude change, calibrated to
+    [0, 1]. Note this is only *one* of the evidence layers the pipeline fuses —
+    see services.algorithms.pipeline for the full detector.
+
+    Raises ValueError when the two feature maps do not describe the same
+    feature space, since differencing them would be meaningless.
     """
-    bf = np.asarray(before_feat, dtype=np.float32)
-    af = np.asarray(after_feat, dtype=np.float32)
-
-    # 1. Ensure at least 3D [H, W, C]
-    if bf.ndim == 2:
-        bf = bf[:, :, None]
-    if af.ndim == 2:
-        af = af[:, :, None]
-
-    # 2. Align spatial grid dimensions [H, W]
-    if bf.shape[:2] != af.shape[:2]:
-        target_h = max(bf.shape[0], af.shape[0])
-        target_w = max(bf.shape[1], af.shape[1])
-        if bf.shape[:2] != (target_h, target_w):
-            bf_resized = []
-            for c in range(bf.shape[-1]):
-                img = Image.fromarray(bf[..., c]).resize((target_w, target_h), Image.Resampling.BILINEAR)
-                bf_resized.append(np.asarray(img, dtype=np.float32))
-            bf = np.stack(bf_resized, axis=-1)
-        if af.shape[:2] != (target_h, target_w):
-            af_resized = []
-            for c in range(af.shape[-1]):
-                img = Image.fromarray(af[..., c]).resize((target_w, target_h), Image.Resampling.BILINEAR)
-                af_resized.append(np.asarray(img, dtype=np.float32))
-            af = np.stack(af_resized, axis=-1)
-
-    # 3. Align channel dimensions
-    if bf.shape[-1] != af.shape[-1]:
-        bf_norm = bf / (np.linalg.norm(bf, axis=-1, keepdims=True) + 1e-8)
-        af_norm = af / (np.linalg.norm(af, axis=-1, keepdims=True) + 1e-8)
-        diff = np.abs(bf_norm.mean(axis=-1) - af_norm.mean(axis=-1))
-    else:
-        diff = np.linalg.norm(bf - af, axis=-1)
-
-    lo, hi = diff.min(), diff.max()
-    if hi - lo < 1e-8:
-        return np.zeros_like(diff, dtype=np.float32)
-    return ((diff - lo) / (hi - lo)).astype(np.float32)
+    cosine, magnitude = deep_feature_difference(before_feat, after_feat)
+    combined = 0.75 * cosine + 0.25 * magnitude
+    return np.clip(combined, 0.0, 1.0).astype(np.float32)
 
 
 def _extract_prithvi_features(raster: np.ndarray, band_map: Optional[Dict[str, int]]):
     """Use Prithvi's six-band order when possible, otherwise RGB placeholder features."""
     chw = _prepare_prithvi_input(raster, band_map)
     if chw is None:
-        chw = np.transpose(raster[..., :min(3, raster.shape[-1])], (2, 0, 1))
+        chw = _to_rgb_chw(raster)
     return prithvi_service.extract(chw), chw
 
 
@@ -176,13 +203,56 @@ def _extract_pair_features(
     after_raster: np.ndarray,
     after_bmap: Optional[Dict[str, int]],
 ):
+    """
+    Extract features for both dates in a single, consistent feature space.
+
+    If either side cannot supply Prithvi's six ordered bands, *both* fall back
+    to the three-band path. Mixing a six-band feature map with a three-band one
+    would difference two different representations and report the mismatch as
+    ground change.
+    """
     before_chw = _prepare_prithvi_input(before_raster, before_bmap)
     after_chw = _prepare_prithvi_input(after_raster, after_bmap)
-    if before_chw is None:
-        before_chw = np.transpose(before_raster[..., :min(3, before_raster.shape[-1])], (2, 0, 1))
-    if after_chw is None:
-        after_chw = np.transpose(after_raster[..., :min(3, after_raster.shape[-1])], (2, 0, 1))
+    if before_chw is None or after_chw is None:
+        before_chw = _to_rgb_chw(before_raster)
+        after_chw = _to_rgb_chw(after_raster)
     return prithvi_service.extract(before_chw), before_chw, prithvi_service.extract(after_chw), after_chw
+
+
+def _make_pair_feature_extractor(
+    before_raster: np.ndarray,
+    before_bmap: Optional[Dict[str, int]],
+    after_raster: np.ndarray,
+    after_bmap: Optional[Dict[str, int]],
+):
+    """
+    Build the feature-extractor callable the pipeline injects into its deep
+    evidence layer, locked to one representation for the whole pair.
+    """
+    six_band = (
+        _prepare_prithvi_input(before_raster, before_bmap) is not None
+        and _prepare_prithvi_input(after_raster, after_bmap) is not None
+    )
+
+    def extractor(raster: np.ndarray, band_map: Optional[Dict[str, int]]):
+        chw = _prepare_prithvi_input(raster, band_map) if six_band else None
+        if chw is None:
+            chw = _to_rgb_chw(raster)
+        feature_map = prithvi_service.extract(chw)
+        return feature_map.array, feature_map.model_name, feature_map.is_placeholder
+
+    return extractor
+
+
+def _method_label(analysis: ChangeAnalysis) -> str:
+    """Human-readable detector identity persisted alongside every result."""
+    if not analysis.deep_available:
+        return f"{PIPELINE_VERSION}/spectral-spatial"
+    if analysis.deep_is_placeholder:
+        return f"{PIPELINE_VERSION}/placeholder-features"
+    if analysis.feature_model == "prithvi-int8-onnx":
+        return f"{PIPELINE_VERSION}/prithvi-onnx"
+    return f"{PIPELINE_VERSION}/{analysis.feature_model}"
 
 
 def _parse_date(date_val: Any) -> Optional[datetime]:
@@ -272,7 +342,7 @@ def find_candidate_tiles(
         # If a reference tile is specified, filter strictly to the exact same grid cell (col_off, row_off)
         if ref_tile is not None:
             exact_cell_cands = [
-                c for c in candidates 
+                c for c in candidates
                 if c["col_off"] == ref_tile.col_off and c["row_off"] == ref_tile.row_off
             ]
             if len(exact_cell_cands) >= 2:
@@ -287,6 +357,180 @@ def find_candidate_tiles(
         # Sort chronologically
         candidates.sort(key=lambda c: c["acquisition_date"])
         return candidates
+
+
+def _status(flag: bool) -> str:
+    return "pass" if flag else "fail"
+
+
+def _build_evidence_checklist(
+    analysis: ChangeAnalysis,
+    temporal_scores: List[float],
+    total_observations: int,
+    before_q: ObservationQuality,
+    after_q: ObservationQuality,
+) -> Dict[str, Any]:
+    """
+    The analyst-facing evidence checklist.
+
+    Every row is a distinct, independently derived test — that is the whole
+    point of the multi-evidence design: a detection is defensible because
+    several unrelated measurements agree, not because one embedding moved.
+    """
+    layer_by_name = {layer.name: layer for layer in analysis.layers}
+    summaries = {item["name"]: item for item in analysis.layer_summaries(settings.CHANGE_PROB_THRESHOLD)}
+
+    valid = analysis.joint_valid
+    deltas = analysis.index_deltas
+    changed = analysis.change_mask.astype(bool)
+    # Index deltas are reported over the detected change, not the whole tile:
+    # a scene-wide average dilutes a real 2% built-up footprint to nothing.
+    footprint = changed if changed.any() else valid
+    d_ndvi_val = round(float(deltas["d_ndvi"][footprint].mean()), 4) if footprint.any() else 0.0
+    d_ndwi_val = round(float(deltas["d_ndwi"][footprint].mean()), 4) if footprint.any() else 0.0
+    d_ndbi_val = round(float(deltas["d_ndbi"][footprint].mean()), 4) if footprint.any() else 0.0
+
+    max_cloud_pair = round(max(before_q.cloud_fraction, after_q.cloud_fraction), 3)
+    min_valid_pixel = round(min(before_q.valid_pixel_fraction, after_q.valid_pixel_fraction), 3)
+    persistence_count = len([s for s in temporal_scores if s > settings.CHANGE_PROB_THRESHOLD])
+    registration = analysis.registration
+    agreement = analysis.evidence_agreement
+
+    deep_summary = summaries.get("deep_feature")
+    spectral_summary = summaries.get("spectral")
+    spatial_summary = summaries.get("spatial_context")
+
+    items: List[Dict[str, Any]] = []
+
+    if deep_summary is not None:
+        deep_layer = layer_by_name["deep_feature"]
+        # A placeholder extractor is degraded, not failed: the layer ran and was
+        # downweighted accordingly, which is an "info" state, not a red cross.
+        deep_status = (
+            "info" if analysis.deep_is_placeholder
+            else _status(deep_summary["changed_fraction"] > 0.005)
+        )
+        items.append({
+            "label": "Deep EO Feature Divergence",
+            "status": deep_status,
+            "value": f"{deep_summary['changed_fraction'] * 100:.1f}% of tile",
+            "details": deep_layer.detail,
+        })
+    else:
+        items.append({
+            "label": "Deep EO Feature Divergence",
+            "status": "info",
+            "value": "unavailable",
+            "details": "No EO feature extractor available; detection rests on spectral and spatial evidence.",
+        })
+
+    items.append({
+        "label": "Built-up Spectral Response",
+        "status": _status(abs(d_ndbi_val) > 0.05),
+        "value": f"ΔNDBI: {d_ndbi_val:+.2f}",
+        "details": "Elevated SWIR response characteristic of infrastructure/structures",
+    })
+    items.append({
+        "label": "Vegetation Phenology Shift",
+        "status": _status(abs(d_ndvi_val) > 0.05),
+        "value": f"ΔNDVI: {d_ndvi_val:+.2f}",
+        "details": "Normalized vegetation change across bi-temporal passes",
+    })
+    items.append({
+        "label": "Water Index Shift",
+        "status": _status(abs(d_ndwi_val) > 0.05),
+        "value": f"ΔNDWI: {d_ndwi_val:+.2f}",
+        "details": "Water extent and moisture boundary signature",
+    })
+
+    if spatial_summary is not None:
+        items.append({
+            "label": "Spatial Structure Consistency",
+            "status": _status(spatial_summary["changed_fraction"] > 0.002),
+            "value": f"{spatial_summary['changed_fraction'] * 100:.1f}% of tile",
+            "details": layer_by_name["spatial_context"].detail,
+        })
+
+    items.append({
+        "label": "Multi-Evidence Agreement",
+        "status": _status(agreement >= 0.5),
+        "value": f"{agreement * 100:.0f}% weighted",
+        "details": (
+            f"Independent evidence layers ({', '.join(analysis.fusion.layer_names)}) fused with "
+            f"reliability weights {analysis.fusion.summary(valid)['weights']}."
+        ),
+    })
+    items.append({
+        "label": "Multi-Pass Persistence",
+        "status": _status(persistence_count >= 1 and len(temporal_scores) >= 1),
+        "value": (
+            f"{persistence_count}/{len(temporal_scores)} passes" if temporal_scores
+            else f"{total_observations} observation(s)"
+        ),
+        "details": "Corroborated across continuous time series observations",
+    })
+    items.append({
+        "label": "Sub-pixel Registration",
+        "status": _status(registration.is_aligned and registration.residual_shift_px <= 0.5),
+        "value": f"{registration.residual_shift_px:.2f}px residual",
+        "details": (
+            f"Aligned by {registration.method} over {registration.inliers} inliers "
+            f"(applied dx={registration.dx:+.2f}px, dy={registration.dy:+.2f}px). "
+            f"Scene correlation {registration.correlation_before:.2f} to "
+            f"{registration.correlation_after:.2f}; correlation also falls with genuine "
+            "change, so alignment is judged on the residual."
+        ),
+    })
+    normalization = analysis.normalization
+    mean_gain = sum(normalization.gains) / len(normalization.gains) if normalization.gains else 1.0
+    mean_offset = sum(normalization.offsets) / len(normalization.offsets) if normalization.offsets else 0.0
+    items.append({
+        "label": "Radiometric Normalization",
+        "status": _status(normalization.method != "identity"),
+        # The fitted transfer is the meaningful figure. The scene-mean shift is
+        # not: fitting on invariant pixels deliberately leaves genuine change in
+        # place, so a large real change can widen that mean rather than shrink it.
+        "value": f"gain x{mean_gain:.2f}, offset {mean_offset:+.3f}",
+        "details": normalization.detail,
+    })
+    items.append({
+        "label": "Cloud & Quality Masking",
+        "status": _status(analysis.clear_fraction >= 0.6 and max_cloud_pair < 0.20),
+        "value": f"{analysis.clear_fraction * 100:.0f}% usable",
+        "details": (
+            f"Cloud/shadow/nodata masked in both dates "
+            f"(before: {analysis.before_mask.method}, after: {analysis.after_mask.method}); "
+            f"masked pixels are excluded from every evidence layer."
+        ),
+    })
+    items.append({
+        "label": "False-Alarm Suppression",
+        "status": _status(analysis.suppression.changed_pixels > 0),
+        "value": f"{analysis.suppression.removed_fraction * 100:.0f}% removed",
+        "details": "; ".join(stage["detail"] for stage in analysis.suppression.stages),
+    })
+
+    return {
+        "d_ndvi": d_ndvi_val,
+        "d_ndwi": d_ndwi_val,
+        "d_ndbi": d_ndbi_val,
+        "persistence_count": persistence_count,
+        "total_observations": total_observations,
+        "valid_pixel_ratio": min_valid_pixel,
+        "registration_correlation": round(registration.correlation_after, 3),
+        "registration_aligned": registration.is_aligned,
+        "cloud_fraction": max_cloud_pair,
+        "radiometric_diff": round(float(analysis.radiometric_shift), 3),
+        "evidence_agreement": round(float(agreement), 3),
+        "clear_fraction": round(float(analysis.clear_fraction), 3),
+        "changed_area_fraction": round(float(analysis.changed_fraction), 5),
+        "deep_layer_available": analysis.deep_available,
+        "deep_layer_is_placeholder": analysis.deep_is_placeholder,
+        "spectral_is_multispectral": bool(
+            spectral_summary and spectral_summary["stats"].get("is_multispectral")
+        ),
+        "items": items,
+    }
 
 
 def run_change_detection(
@@ -342,76 +586,105 @@ def run_change_detection(
 
         before_tile = session.get(Tile, before_cand["tile_id"])
         after_tile = session.get(Tile, after_cand["tile_id"])
-        before_raster, before_bmap = _load_tile_multispectral_or_rgb(before_tile)
-        after_raster, after_bmap = _load_tile_multispectral_or_rgb(after_tile)
 
-        # 2. Co-registration: Align after image to before image coordinate frame
-        reg_result = register_image_pair(before_raster, after_raster)
-        aligned_after_raster = reg_result.aligned_after
-
-        # 3. Relative Radiometric Normalization: match after histogram to before
-        norm_after_raster = normalize_histogram_match(aligned_after_raster, before_raster)
-
-        # 4. Feature Extraction & Change Probability Map
-        before_feat_map, before_chw, after_feat_map, norm_after_chw = _extract_pair_features(
-            before_raster,
-            before_bmap,
-            norm_after_raster,
-            after_bmap,
+        # ------------------------------------------------------------------
+        # Multi-evidence pipeline over the selected before/after pair.
+        # ------------------------------------------------------------------
+        before_obs = _load_observation(before_tile)
+        after_obs = _load_observation(after_tile)
+        extractor = _make_pair_feature_extractor(
+            before_obs.raster, before_obs.band_map, after_obs.raster, after_obs.band_map
+        )
+        analysis = analyze_change_pair(
+            before_obs,
+            after_obs,
+            feature_extractor=extractor,
+            threshold=settings.CHANGE_PROB_THRESHOLD,
+            weights={
+                "deep_feature": settings.W_EVIDENCE_DEEP,
+                "spectral": settings.W_EVIDENCE_SPECTRAL,
+                "spatial_context": settings.W_EVIDENCE_SPATIAL,
+            },
+            context_radius=settings.CHANGE_CONTEXT_RADIUS,
+            min_region_pixels=settings.CHANGE_MIN_REGION_PIXELS,
+            cloud_dilation=settings.CLOUD_MASK_DILATION,
         )
 
-        change_prob_map = _difference_to_change_map(before_feat_map.array, after_feat_map.array)
-        raw_change_score = float(change_prob_map.mean())
+        before_raster = before_obs.raster
+        norm_after_raster = analysis.normalized_after
+        reg_result = analysis.registration
+        prob_map_full = analysis.change_probability
+        change_mask_binary = analysis.change_mask
+        raw_change_score = analysis.raw_change_score
 
-        # Resize probability map to actual raster resolution (handles edge tiles of size < 256)
-        h_orig, w_orig = before_raster.shape[0], before_raster.shape[1]
-        if cv2 is not None:
-            prob_map_full = cv2.resize(change_prob_map, (w_orig, h_orig), interpolation=cv2.INTER_LINEAR)
-        else:
-            prob_map_full = np.asarray(
-                Image.fromarray(change_prob_map.astype(np.float32)).resize((w_orig, h_orig), Image.Resampling.BILINEAR)
-            )
-        change_mask_binary = (prob_map_full > settings.CHANGE_PROB_THRESHOLD).astype(np.uint8)
-
-        # 5. Quality Diagnostics
+        # Quality diagnostics for the scene-level scorer.
         before_rgb = before_raster[..., :3]
         after_rgb = norm_after_raster[..., :3]
-
         before_q = ObservationQuality(
-            cloud_fraction=cloud_fraction_estimate(before_rgb),
-            valid_pixel_fraction=valid_pixel_fraction(before_chw),
+            cloud_fraction=1.0 - analysis.before_mask.clear_fraction,
+            valid_pixel_fraction=valid_pixel_fraction(np.transpose(before_raster, (2, 0, 1))),
             sharpness=sharpness_score(before_rgb.mean(axis=-1)),
             quality_score=before_tile.quality_score or 0.5,
         )
         after_q = ObservationQuality(
-            cloud_fraction=cloud_fraction_estimate(after_rgb),
-            valid_pixel_fraction=valid_pixel_fraction(norm_after_chw),
+            cloud_fraction=1.0 - analysis.after_mask.clear_fraction,
+            valid_pixel_fraction=valid_pixel_fraction(np.transpose(norm_after_raster, (2, 0, 1))),
             sharpness=sharpness_score(after_rgb.mean(axis=-1)),
             quality_score=after_tile.quality_score or 0.5,
         )
+        radiometric_diff = float(analysis.radiometric_shift)
 
-        radiometric_diff = float(abs(before_rgb.mean() - after_rgb.mean()))
-        # 6. Multi-Temporal Stack Evaluation & Full Observations Stack (Tier 1.3)
-        temporal_scores = []
+        # ------------------------------------------------------------------
+        # Temporal corroboration across the rest of the observation stack.
+        # Each extra date is scored by the same multi-evidence pipeline, so
+        # persistence means "several independent evidence types agreed again",
+        # not "the embedding moved again".
+        # ------------------------------------------------------------------
+        temporal_scores: List[float] = []
         earliest_change_date = after_tile.acquisition_date
-        observation_stack = []
+        observation_stack: List[Dict[str, Any]] = []
+        corroboration_budget = MAX_CORROBORATION_PASSES
 
-        # Iterate over all candidates in chronological order to build full timeline
         for idx, cand in enumerate(candidates):
             c_tile = session.get(Tile, cand["tile_id"])
             if not c_tile:
                 continue
-            c_rast, c_bmap = _load_tile_multispectral_or_rgb(c_tile)
-            c_indices = _load_precomputed_indices(c_tile) or compute_spectral_indices(c_rast, c_bmap)
-            
+            c_obs = _load_observation(c_tile)
+            c_indices = c_obs.indices or compute_spectral_indices(c_obs.raster, c_obs.band_map)
+
             d_base = 0.0
-            if idx > 0:
-                c_feat, _ = _extract_prithvi_features(c_rast, c_bmap)
-                if c_feat.array.shape == before_feat_map.array.shape:
-                    d_base = float(_difference_to_change_map(before_feat_map.array, c_feat.array).mean())
+            agreement = 0.0
+            if idx > 0 and corroboration_budget > 0:
+                corroboration_budget -= 1
+                try:
+                    pass_analysis = analyze_change_pair(
+                        before_obs,
+                        c_obs,
+                        feature_extractor=_make_pair_feature_extractor(
+                            before_obs.raster, before_obs.band_map, c_obs.raster, c_obs.band_map
+                        ),
+                        threshold=settings.CHANGE_PROB_THRESHOLD,
+                        weights={
+                            "deep_feature": settings.W_EVIDENCE_DEEP,
+                            "spectral": settings.W_EVIDENCE_SPECTRAL,
+                            "spatial_context": settings.W_EVIDENCE_SPATIAL,
+                        },
+                        context_radius=settings.CHANGE_CONTEXT_RADIUS,
+                        min_region_pixels=settings.CHANGE_MIN_REGION_PIXELS,
+                        cloud_dilation=settings.CLOUD_MASK_DILATION,
+                    )
+                    d_base = float(pass_analysis.raw_change_score)
+                    agreement = float(pass_analysis.evidence_agreement)
                     temporal_scores.append(d_base)
-                    if d_base > settings.CHANGE_PROB_THRESHOLD and c_tile.acquisition_date < earliest_change_date:
+                    if (
+                        d_base > settings.CHANGE_PROB_THRESHOLD
+                        and c_tile.acquisition_date
+                        and c_tile.acquisition_date < earliest_change_date
+                    ):
                         earliest_change_date = c_tile.acquisition_date
+                except Exception:
+                    # A single unusable date must not sink the whole timeline.
+                    d_base = 0.0
 
             thumb_name = Path(c_tile.thumbnail_path).name if c_tile.thumbnail_path else "thumb.jpg"
             observation_stack.append({
@@ -426,6 +699,7 @@ def run_change_detection(
                 "quality_score": round(c_tile.quality_score or 0.8, 3),
                 "thumbnail_url": f"/static/tiles/{c_tile.scene_id}/{thumb_name}",
                 "distance_from_baseline": round(d_base, 3),
+                "evidence_agreement": round(agreement, 3),
                 "mean_ndvi": round(float(c_indices.ndvi.mean()), 3),
                 "mean_ndwi": round(float(c_indices.ndwi.mean()), 3),
                 "mean_ndbi": round(float(c_indices.ndbi.mean()), 3),
@@ -438,7 +712,10 @@ def run_change_detection(
             if obs["acquisition_date"] and obs["acquisition_date"] == earliest_change_date.isoformat():
                 obs["is_earliest_change"] = True
 
-        # 7. False-Alarm Suppression (Tier 1.5)
+        # ------------------------------------------------------------------
+        # Scene-level false-alarm scoring & confidence.
+        # ------------------------------------------------------------------
+        layer_summaries = analysis.layer_summaries(settings.CHANGE_PROB_THRESHOLD)
         suppression = evaluate(
             raw_change_score=raw_change_score,
             before_q=before_q,
@@ -446,29 +723,29 @@ def run_change_detection(
             registration_correlation=reg_result.correlation_after,
             radiometric_diff=radiometric_diff,
             temporal_series=temporal_scores if temporal_scores else None,
+            evidence_agreement=analysis.evidence_agreement,
+            evidence_layers=layer_summaries,
+            clear_fraction=analysis.clear_fraction,
+            radiometry_normalized=analysis.normalization.method != "identity",
+            registration_residual_px=reg_result.residual_shift_px,
+            registration_aligned=reg_result.is_aligned,
         )
 
-        # 8. Layer-2 Change Typing (Construction, Clearance, Water, Road)
-        before_indices = _load_precomputed_indices(before_tile) or compute_spectral_indices(before_raster, before_bmap)
-        after_indices = _load_precomputed_indices(after_tile) or compute_spectral_indices(norm_after_raster, after_bmap)
+        before_indices = analysis.before_indices
+        after_indices = analysis.after_indices
+        classified_regions: List[ChangeRegion] = analysis.regions
+        region_evidence_map: Dict[int, Dict[str, float]] = {}
+        for stage in analysis.stages:
+            if stage.name == "change_typing":
+                region_evidence_map = stage.metrics.get("region_evidence", {}) or {}
+                break
 
-        classified_regions: List[ChangeRegion] = classify_change_regions(
-            change_mask=change_mask_binary,
-            before_indices=before_indices,
-            after_indices=after_indices,
-            min_region_size=8,
-        )
+        dominant_change_type = analysis.dominant_change_type
+        dominant_dynamics = analysis.dominant_dynamics
 
-        # Aggregate detected change types and multi-temporal dynamics
-        type_counts = {}
-        dynamics_counts = {}
-        for r in classified_regions:
-            type_counts[r.change_type] = type_counts.get(r.change_type, 0) + r.area_pixels
-            dynamics_counts[r.dynamics] = dynamics_counts.get(r.dynamics, 0) + r.area_pixels
-        dominant_change_type = max(type_counts, key=type_counts.get) if type_counts else "no_significant_change"
-        dominant_dynamics = max(dynamics_counts, key=dynamics_counts.get) if dynamics_counts else "stable"
-
-        # 9. Save Change Mask Image (RGBA overlay)
+        # ------------------------------------------------------------------
+        # Persist the change mask overlay.
+        # ------------------------------------------------------------------
         mask_dir = settings.TILES_DIR / "change_masks"
         mask_dir.mkdir(parents=True, exist_ok=True)
         mask_filename = f"{before_tile.tile_id}_{after_tile.tile_id}.png"
@@ -482,69 +759,16 @@ def run_change_detection(
         changed_pixels = int(change_mask_binary.sum())
         total_change_area_m2 = changed_pixels * (pixel_res ** 2)
 
-        if before_feat_map.is_placeholder:
-            method = "feature-diff-placeholder"
-        elif before_feat_map.model_name == "prithvi-int8-onnx":
-            method = "prithvi-onnx-diff"
-        else:
-            method = "prithvi-diff"
+        method = _method_label(analysis)
 
-        # Spectral deltas for Tier 1.4 Evidence Checklist
-        d_ndvi_val = round(float(after_indices.ndvi.mean() - before_indices.ndvi.mean()), 4)
-        d_ndwi_val = round(float(after_indices.ndwi.mean() - before_indices.ndwi.mean()), 4)
-        d_ndbi_val = round(float(after_indices.ndbi.mean() - before_indices.ndbi.mean()), 4)
-        max_cloud_pair = round(max(before_q.cloud_fraction, after_q.cloud_fraction), 3)
-        min_valid_pixel = round(min(before_q.valid_pixel_fraction, after_q.valid_pixel_fraction), 3)
+        evidence_checklist = _build_evidence_checklist(
+            analysis, temporal_scores, len(candidates), before_q, after_q
+        )
 
-        evidence_checklist = {
-            "d_ndvi": d_ndvi_val,
-            "d_ndwi": d_ndwi_val,
-            "d_ndbi": d_ndbi_val,
-            "persistence_count": len([s for s in temporal_scores if s > settings.CHANGE_PROB_THRESHOLD]),
-            "total_observations": len(candidates),
-            "valid_pixel_ratio": min_valid_pixel,
-            "registration_correlation": round(reg_result.correlation_after, 3),
-            "registration_aligned": reg_result.is_aligned,
-            "cloud_fraction": max_cloud_pair,
-            "radiometric_diff": round(radiometric_diff, 3),
-            "items": [
-                {
-                    "label": "Built-up Spectral Response",
-                    "status": "pass" if abs(d_ndbi_val) > 0.05 else "info",
-                    "value": f"ΔNDBI: {d_ndbi_val:+.2f}",
-                    "details": "Elevated SWIR response characteristic of infrastructure/structures",
-                },
-                {
-                    "label": "Vegetation Phenology Shift",
-                    "status": "pass" if abs(d_ndvi_val) > 0.05 else "info",
-                    "value": f"ΔNDVI: {d_ndvi_val:+.2f}",
-                    "details": "Normalized vegetation change across bi-temporal passes",
-                },
-                {
-                    "label": "Water Index Shift",
-                    "status": "pass" if abs(d_ndwi_val) > 0.05 else "info",
-                    "value": f"ΔNDWI: {d_ndwi_val:+.2f}",
-                    "details": "Water extent and moisture boundary signature",
-                },
-                {
-                    "label": "Multi-Pass Persistence",
-                    "status": "pass" if len(temporal_scores) >= 2 else "info",
-                    "value": f"{len([s for s in temporal_scores if s > settings.CHANGE_PROB_THRESHOLD])}/{len(temporal_scores)} passes" if temporal_scores else "2/2 passes",
-                    "details": "Corroborated across continuous time series observations",
-                },
-                {
-                    "label": "Sub-pixel Registration",
-                    "status": "pass" if reg_result.correlation_after >= 0.7 else "fail",
-                    "value": f"{int(reg_result.correlation_after * 100)}% corr",
-                    "details": "FFT phase correlation and ECC alignment quality",
-                },
-                {
-                    "label": "Cloud & Atmospheric Quality",
-                    "status": "pass" if max_cloud_pair < 0.20 else "fail",
-                    "value": f"{int(max_cloud_pair * 100)}% cloud",
-                    "details": "Mask clear-sky confidence score",
-                },
-            ],
+        pipeline_audit = {
+            "version": PIPELINE_VERSION,
+            "threshold": settings.CHANGE_PROB_THRESHOLD,
+            "stages": analysis.stage_dicts(),
         }
 
         # Persist ChangeResult
@@ -558,7 +782,9 @@ def run_change_detection(
             change_mask_path=str(mask_path),
             reasons=suppression.reasons,
             method=method,
-            is_placeholder_model=before_feat_map.is_placeholder,
+            is_placeholder_model=analysis.deep_is_placeholder,
+            evidence_layers=layer_summaries,
+            pipeline_stages=analysis.stage_dicts(),
         )
         session.add(result)
         session.flush()
@@ -581,6 +807,16 @@ def run_change_detection(
             "earliest_supported_observation": earliest_change_date.isoformat(),
             "observations": observation_stack,
             "evidence": evidence_checklist,
+            "evidence_layers": layer_summaries,
+            "fusion": analysis.fusion.summary(analysis.joint_valid),
+            "masking": {
+                "before": analysis.before_mask.summary(),
+                "after": analysis.after_mask.summary(),
+                "joint_clear_fraction": round(float(analysis.clear_fraction), 4),
+            },
+            "normalization": analysis.normalization.summary(),
+            "suppression": analysis.suppression.summary(),
+            "pipeline": pipeline_audit,
             "confidence_breakdown": suppression.confidence_breakdown,
             "confounds": [
                 {
@@ -598,6 +834,7 @@ def run_change_detection(
                 "inliers": reg_result.inliers,
                 "dx": round(reg_result.dx, 2),
                 "dy": round(reg_result.dy, 2),
+                "residual_shift_px": round(reg_result.residual_shift_px, 3),
             },
             "change_regions": [
                 {
@@ -614,6 +851,7 @@ def run_change_detection(
                     "mean_d_ndbi": r.mean_d_ndbi,
                     "elongation": r.elongation,
                     "rationale": r.rationale,
+                    "evidence": region_evidence_map.get(r.region_id, {}),
                 }
                 for r in classified_regions
             ],
@@ -635,5 +873,5 @@ def run_change_detection(
                 "quality": after_q.__dict__,
             },
             "method": method,
-            "is_placeholder_model": before_feat_map.is_placeholder,
+            "is_placeholder_model": analysis.deep_is_placeholder,
         }

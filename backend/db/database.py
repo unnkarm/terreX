@@ -112,6 +112,10 @@ def _ensure_ingestion_schema(engine):
             "embedding_model_version": "VARCHAR",
             "embedding": "JSON", "embedding_model": "VARCHAR", "embedding_is_placeholder": "BOOLEAN DEFAULT FALSE",
         },
+        "change_results": {
+            # Multi-evidence pipeline provenance, added with the evidence-fusion detector.
+            "evidence_layers": "JSON", "pipeline_stages": "JSON",
+        },
     }
     inspector = inspect(engine)
     with engine.begin() as conn:
