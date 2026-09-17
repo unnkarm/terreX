@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,6 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
 # Canonical AOI & Regional Bounding Boxes [minLon, minLat, maxLon, maxLat]
 # ---------------------------------------------------------------------------
 DEFAULT_BBOX: List[float] = [88.40, 22.56, 88.48, 22.62]
+OPERATIONAL_BOUNDS: List[float] = [87.75, 21.40, 88.65, 23.60]
 
 REGION_BBOXES: Dict[str, List[float]] = {
     "salt_lake_sector_5": [88.415, 22.565, 88.445, 22.590],
@@ -55,7 +56,19 @@ REGION_ALIASES: Dict[str, str] = {
 def resolve_bbox(region_name: Optional[str] = None, bbox: Optional[List[float]] = None) -> List[float]:
     """Resolve bounding box from explicit list, named region, or default."""
     if bbox is not None:
-        return bbox
+        resolved = bbox
+        if len(resolved) != 4 or resolved[0] >= resolved[2] or resolved[1] >= resolved[3]:
+            raise ValueError("bbox must be [min_lon, min_lat, max_lon, max_lat]")
+        if not (
+            OPERATIONAL_BOUNDS[0] <= resolved[0]
+            and OPERATIONAL_BOUNDS[1] <= resolved[1]
+            and resolved[2] <= OPERATIONAL_BOUNDS[2]
+            and resolved[3] <= OPERATIONAL_BOUNDS[3]
+        ):
+            raise ValueError(
+                f"bbox must stay inside the Greater Kolkata / West Bengal operational boundary {OPERATIONAL_BOUNDS}"
+            )
+        return resolved
     if region_name:
         key = region_name.strip().lower().replace(" ", "_").replace("-", "_").replace("/", "_")
         canonical = REGION_ALIASES.get(key, key)
@@ -65,6 +78,23 @@ def resolve_bbox(region_name: Optional[str] = None, bbox: Optional[List[float]] 
             f"Unknown region '{region_name}'. Known regions: {list(REGION_BBOXES.keys())} or aliases {list(REGION_ALIASES.keys())}"
         )
     return DEFAULT_BBOX
+
+
+def dense_revisit_windows(start_date: str, end_date: str, cadence_days: int) -> List[tuple]:
+    """Build non-overlapping acquisition windows at the nominal revisit cadence."""
+    if cadence_days < 1:
+        raise ValueError("cadence_days must be positive")
+    start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    if end < start:
+        raise ValueError("end_date must not precede start_date")
+    windows: List[tuple] = []
+    cursor = start
+    while cursor <= end:
+        window_end = min(cursor + timedelta(days=cadence_days - 1), end)
+        windows.append((cursor.isoformat(), window_end.isoformat()))
+        cursor += timedelta(days=cadence_days)
+    return windows
 
 
 def download_date() -> str:

@@ -29,9 +29,9 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 try:
-    from acquisition_common import acquire_from_isro, DEFAULT_BBOX
+    from acquisition_common import acquire_from_isro, DEFAULT_BBOX, resolve_bbox
 except ImportError:
-    from scripts.acquisition_common import acquire_from_isro, DEFAULT_BBOX  # type: ignore
+    from scripts.acquisition_common import acquire_from_isro, DEFAULT_BBOX, resolve_bbox  # type: ignore
 
 _DEFAULT_OUTPUT = Path(__file__).parents[1] / "data" / "incoming" / "isro"
 
@@ -55,7 +55,7 @@ def acquire_isro(
     dest_dir = Path(output_dir) if output_dir else _DEFAULT_OUTPUT
     dest_dir.mkdir(parents=True, exist_ok=True)
     ranges = date_ranges or _DEFAULT_DATE_RANGES
-    effective_bbox = bbox or DEFAULT_BBOX
+    effective_bbox = resolve_bbox(bbox=bbox) if bbox is not None else DEFAULT_BBOX
 
     print("=" * 60)
     print("ISRO / Bhoonidhi Acquisition (Supplementary Source)")

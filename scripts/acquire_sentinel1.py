@@ -17,15 +17,12 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 try:
-    from acquisition_common import acquire_from_copernicus, DEFAULT_BBOX, resolve_bbox
+    from acquisition_common import acquire_from_copernicus, dense_revisit_windows, resolve_bbox
 except ImportError:
-    from scripts.acquisition_common import acquire_from_copernicus, DEFAULT_BBOX, resolve_bbox  # type: ignore
+    from scripts.acquisition_common import acquire_from_copernicus, dense_revisit_windows, resolve_bbox  # type: ignore
 
-# Monsoon window — highest cloud probability over Kolkata; radar is most useful here
-_SENTINEL1_DATE_RANGES: List[tuple] = [
-    ("2024-06-01", "2024-09-30"),   # coincides with a Sentinel-2 monsoon gap window
-    ("2025-06-01", "2025-09-30"),
-]
+# Monsoon window — radar is most useful here; default to recent 2026 window
+_SENTINEL1_DATE_RANGES: List[tuple] = dense_revisit_windows("2026-06-01", "2026-09-17", 6)
 
 _OUTPUT_DIR = Path(__file__).parents[1] / "data" / "incoming" / "sentinel1"
 
@@ -50,6 +47,7 @@ def acquire_sentinel1(
 
 
 import argparse
+from datetime import datetime, timedelta
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -75,9 +73,44 @@ if __name__ == "__main__":
         default=None,
         help="Custom bounding box coordinates",
     )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="Start date (YYYY-MM-DD), default: 2026-06-01",
+    )
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        help="End date (YYYY-MM-DD), default: 2026-09-17",
+    )
+    parser.add_argument(
+        "--cadence-days",
+        type=int,
+        default=6,
+        help="Revisit window size in days (default: 6)",
+    )
+    parser.add_argument(
+        "--days-back",
+        type=int,
+        default=None,
+        help="Acquire scenes from the last N days up to today",
+    )
     args = parser.parse_args()
 
-    result = acquire_sentinel1(region=args.region, bbox=args.bbox)
+    date_ranges = None
+    if args.days_back:
+        end_d = datetime.now().date()
+        start_d = end_d - timedelta(days=args.days_back)
+        date_ranges = dense_revisit_windows(start_d.isoformat(), end_d.isoformat(), args.cadence_days)
+    elif args.start_date and args.end_date:
+        date_ranges = dense_revisit_windows(args.start_date, args.end_date, args.cadence_days)
+    elif args.start_date:
+        end_d = datetime.now().date().isoformat()
+        date_ranges = dense_revisit_windows(args.start_date, end_d, args.cadence_days)
+
+    result = acquire_sentinel1(region=args.region, bbox=args.bbox, date_ranges=date_ranges)
     if result["downloaded"] < 1:
         print(
             "\n[WARN] WARNING: No Sentinel-1 GRD scene downloaded. "

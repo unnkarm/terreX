@@ -43,23 +43,11 @@ PRESET_AOIS = {
         "default_min_zoom": 8,
         "default_max_zoom": 14,
     },
-    "kolkata_100km": {
-        "name": "Kolkata & 100km Surrounding Region (~200x200 km)",
-        "bbox": (87.40, 21.65, 89.35, 23.50),  # Full 100km radius around Kolkata
+    "kolkata_operational": {
+        "name": "Greater Kolkata / West Bengal Operational Boundary",
+        "bbox": (87.75, 21.40, 88.65, 23.60),
         "default_min_zoom": 7,
         "default_max_zoom": 14,
-    },
-    "sundarbans": {
-        "name": "Sundarbans Coastal Biosphere",
-        "bbox": (88.40, 21.60, 89.30, 22.40),
-        "default_min_zoom": 8,
-        "default_max_zoom": 13,
-    },
-    "bengal_delta": {
-        "name": "Greater Bengal Delta",
-        "bbox": (87.50, 21.50, 90.50, 24.20),
-        "default_min_zoom": 6,
-        "default_max_zoom": 11,
     },
 }
 
@@ -183,10 +171,21 @@ def main():
         region_name = preset["name"]
     else:
         parts = [float(p.strip()) for p in args.bbox.split(",")]
+        if len(parts) != 4:
+            raise ValueError("--bbox must contain exactly min_lon,min_lat,max_lon,max_lat")
         min_lon, min_lat, max_lon, max_lat = parts[0], parts[1], parts[2], parts[3]
         z_min = args.zoom_min or 8
         z_max = args.zoom_max or 13
         region_name = f"Custom Bounding Box [{min_lon:.3f}, {min_lat:.3f}, {max_lon:.3f}, {max_lat:.3f}]"
+
+    operational_bounds = (87.75, 21.40, 88.65, 23.60)
+    if not (
+        operational_bounds[0] <= min_lon < max_lon <= operational_bounds[2]
+        and operational_bounds[1] <= min_lat < max_lat <= operational_bounds[3]
+    ):
+        raise ValueError(
+            f"Basemap AOI must stay inside {operational_bounds}; max longitude is 88.65E"
+        )
 
     tiles = calculate_tile_list(min_lon, min_lat, max_lon, max_lat, z_min, z_max)
     total_tiles = len(tiles)
