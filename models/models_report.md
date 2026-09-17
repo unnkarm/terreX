@@ -21,7 +21,7 @@ Here are the specific models currently integrated into the system:
   - [`backend/services/prithvi.py`](file:///c:/Users/SUBHAM%20NABIK/Desktop/terreX/backend/services/prithvi.py): The `_RealPrithvi` class loads the model using `terratorch` (HuggingFace format).
 - **Where it is used**:
   - [`backend/services/change_detection.py`](file:///c:/Users/SUBHAM%20NABIK/Desktop/terreX/backend/services/change_detection.py): Prithvi feature maps are extracted from "before" and "after" image patches to compute a per-patch feature-difference map, identifying areas of change.
-- **Current Status**: **Not Staged (Placeholder Mode)**. Only the `README.md` is present in `models/prithvi/`. The system will currently fall back to simple placeholder logic until the weights (`prithvi_eo_v1.pt`) and `config.json` are downloaded into this folder.
+- **Current Status**: **Architecture & Config Staged**. The official architecture implementation (`prithvi_mae.py`) and configuration (`config.json`) are integrated in `models/prithvi/`. Feature extraction will use the ViT backbone once model weights (`Prithvi_EO_V1_100M.pt` / `prithvi_int8.onnx`) are placed into this folder, with fallback to statistical patch features in the interim.
 
 ## 3. Dedicated Change-Detection Head (Optional / Future Work)
 - **Purpose**: A trained network (e.g., a Siamese difference network or full bi-temporal segmentation model) to replace the simple feature-difference approach currently used.

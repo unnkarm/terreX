@@ -13,6 +13,7 @@ data/tiles/*
 models/remoteclip/*.pt
 models/prithvi/*.pt
 models/prithvi/*.json
+!models/prithvi/config.json
 models/change/*.pt
 *.pt
 powershell.cmd
