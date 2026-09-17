@@ -48,7 +48,11 @@ export default function WorkspacePage() {
 
   // Dynamically compute Target AOIs from currently ingested scenes in the database
   const targetAois: TargetAoi[] = useMemo(() => {
-    if (!scenes || scenes.length === 0) {
+    const validScenes = (scenes || []).filter(
+      (s) => (s.tile_count ?? 0) > 0 && s.status === "ingested"
+    );
+
+    if (validScenes.length === 0) {
       return [
         {
           id: "default",
@@ -61,12 +65,12 @@ export default function WorkspacePage() {
       ];
     }
 
-    return scenes.map((s, idx) => {
+    return validScenes.map((s, idx) => {
       const bbox = s.provenance?.bounding_box;
       const centerLon = bbox ? (bbox[0] + bbox[2]) / 2.0 : 88.4;
       const centerLat = bbox ? (bbox[1] + bbox[3]) / 2.0 : 22.5;
       const sensorLabel = s.sensor || "EO";
-      const sourceLabel = s.source_portal || s.underlying_dataset || "Ingested Scene";
+      const sourceLabel = s.source_portal || s.underlying_dataset || "Copernicus";
       const tileCount = s.tile_count ?? 0;
 
       return {

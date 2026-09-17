@@ -8,25 +8,35 @@ interface ChangeTimelineProps {
   earliestDate?: string;
   registrationConfidence?: number;
   observations?: ChangeObservation[];
+  confirmedDate?: string;
+  uncertaintyDays?: number;
+  persistenceStatus?: string;
 }
 
 export default function ChangeTimeline({
   onSelectDate,
   earliestDate,
-  registrationConfidence = 96,
+  registrationConfidence,
   observations,
+  confirmedDate,
+  uncertaintyDays,
+  persistenceStatus,
 }: ChangeTimelineProps) {
   const hasLiveObservations = Boolean(observations && observations.length > 0);
 
   const nodes: (ChangeObservation & { status?: string })[] = hasLiveObservations
     ? (observations || []).map((obs) => ({
         ...obs,
-        status: obs.is_baseline
+        status: !obs.is_valid
+          ? "Quality Gated"
+          : obs.is_baseline
           ? "Baseline Reference"
           : obs.is_earliest_change
-          ? "Initial Detection"
-          : obs.distance_from_baseline > 0.4
-          ? "Persistent Structural Change"
+          ? "Onset Detection"
+          : obs.is_persistence_confirmation
+          ? "Persistence Confirmed"
+          : obs.is_transient
+          ? "Transient Suppressed"
           : "Observation Pass",
       }))
     : [];
@@ -70,7 +80,8 @@ export default function ChangeTimeline({
   };
 
   const selectedNode = nodes[selectedIdx] || nodes[0];
-  const displayEarliest = earliestDate ? earliestDate.slice(0, 10) : nodes.find((n) => n.is_earliest_change)?.date_formatted || "2025-10-25";
+  const displayEarliest = earliestDate ? earliestDate.slice(0, 10) : nodes.find((n) => n.is_earliest_change)?.date_formatted;
+  const displayConfirmed = confirmedDate?.slice(0, 10) || nodes.find((n) => n.is_persistence_confirmation)?.date_formatted;
 
   return (
     <div className="space-y-3.5 p-4 bg-neutral-900 border border-neutral-800 rounded shadow-2xl font-mono text-xs select-none">
@@ -110,8 +121,12 @@ export default function ChangeTimeline({
                   className={`relative w-7 h-7 rounded-full flex items-center justify-center font-mono text-xs transition-all duration-200 ${
                     isSelected
                       ? "bg-emerald-500 text-black font-bold ring-4 ring-emerald-500/30 scale-110 shadow-lg shadow-emerald-500/25"
+                      : n.is_persistence_confirmation
+                      ? "bg-emerald-500/20 border border-emerald-400 text-emerald-300 hover:scale-105 font-bold"
                       : n.is_earliest_change
                       ? "bg-amber-500/20 border border-amber-400 text-amber-300 hover:scale-105 font-bold"
+                      : n.is_transient
+                      ? "bg-red-950 border border-red-700 text-red-300"
                       : "bg-neutral-950 border border-neutral-800 text-neutral-400 hover:border-neutral-600 hover:bg-neutral-800"
                   }`}
                   title={`${n.year} (${n.date_formatted}) — Click to inspect pass`}
@@ -170,35 +185,39 @@ export default function ChangeTimeline({
         </div>
       </div>
 
-      {/* Earliest Verified Change Card */}
-      <div className="p-3 rounded bg-emerald-950/25 border border-emerald-800/40 space-y-2">
+      {/* Confirmed change-point timing */}
+      {displayEarliest && displayConfirmed ? <div className="p-3 rounded bg-emerald-950/25 border border-emerald-800/40 space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300 uppercase tracking-wider">
             <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span>Earliest Verified Change</span>
+            <span>Confirmed Change Point</span>
           </div>
           <span className="text-xs font-bold text-emerald-300 bg-emerald-900/50 px-2.5 py-0.5 rounded border border-emerald-700/60 font-mono">
-            {displayEarliest}
+            {displayEarliest} → {displayConfirmed}
           </span>
         </div>
 
         <ul className="space-y-1 text-xs text-neutral-300 pt-0.5 font-sans">
           <li className="flex items-center gap-2 text-neutral-300">
             <span className="text-emerald-400 font-bold">✓</span>
-            <span>Corroborated across continuous satellite time-series</span>
+            <span>Onset persisted into the required consecutive valid pass</span>
           </li>
           <li className="flex items-center gap-2 text-neutral-300">
             <span className="text-emerald-400 font-bold">✓</span>
-            <span>Sub-pixel co-registration confidence: <strong className="text-emerald-300 font-mono">{registrationConfidence}%</strong></span>
+            <span>Sub-pixel co-registration confidence: <strong className="text-emerald-300 font-mono">{registrationConfidence != null ? `${registrationConfidence}%` : "not available"}</strong></span>
           </li>
           <li className="flex items-center gap-2 text-neutral-300">
             <span className="text-emerald-400 font-bold">✓</span>
-            <span>Ground spectral signature persistent past detection threshold</span>
+            <span>Temporal uncertainty: <strong className="text-emerald-300 font-mono">{uncertaintyDays != null ? `${uncertaintyDays.toFixed(1)} days` : "not available"}</strong></span>
           </li>
         </ul>
-      </div>
+      </div> : (
+        <div className="p-3 rounded bg-neutral-950 border border-neutral-800 text-[11px] text-neutral-400">
+          Persistence status: <strong className="text-white uppercase">{persistenceStatus || "not confirmed"}</strong>. No onset date is reported until the configured consecutive-pass rule is met.
+        </div>
+      )}
     </div>
   );
 }

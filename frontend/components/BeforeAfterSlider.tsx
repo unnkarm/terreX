@@ -11,7 +11,6 @@ interface BeforeAfterSliderProps {
   afterDate?: string | null;
   dominantChange?: string | null;
   confidence?: number | null;
-  isFallback?: boolean;
   activeLayers?: Record<string, boolean>;
 }
 
@@ -25,7 +24,6 @@ export default function BeforeAfterSlider({
   afterDate = null,
   dominantChange = null,
   confidence = null,
-  isFallback = false,
   activeLayers,
 }: BeforeAfterSliderProps) {
   const [sliderPos, setSliderPos] = useState(50); // percentage 0 - 100
@@ -173,7 +171,7 @@ export default function BeforeAfterSlider({
           />
         )}
 
-        {/* CHANGE MASK HEATMAP OVERLAY — real PNG from backend or fallback gradient */}
+        {/* CHANGE MASK HEATMAP OVERLAY — real PNG from backend only */}
         {isMaskActive && (mode === "MASK" || mode === "SPLIT") && (
           <div
             className={`absolute inset-0 pointer-events-none transition-opacity ${mode === "MASK" ? "opacity-95" : "opacity-40"
@@ -189,10 +187,7 @@ export default function BeforeAfterSlider({
                 className="absolute inset-0 w-full h-full object-cover mix-blend-screen"
                 style={{ filter: "sepia(1) hue-rotate(-20deg) saturate(4) brightness(1.8)" }}
               />
-            ) : (
-              // Fallback synthetic heatmap when no mask is available yet
-              <div className="w-full h-full bg-[radial-gradient(ellipse_at_center,rgba(239,68,68,0.75)_0%,rgba(234,179,8,0.4)_45%,transparent_70%)] mix-blend-screen" />
-            )}
+            ) : null}
           </div>
         )}
 
@@ -228,11 +223,6 @@ export default function BeforeAfterSlider({
           CONFIDENCE: {confidence == null ? "N/A" : `${Math.round(confidence * 100)}%`}
         </span>
       </div>
-      {isFallback && (
-        <div className="border border-amber-700/70 bg-amber-950/40 px-2 py-1.5 text-[9px] font-mono uppercase tracking-wider text-amber-300">
-          Demo fallback result — live backend analysis was unavailable.
-        </div>
-      )}
     </div>
   );
 }

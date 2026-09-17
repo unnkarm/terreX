@@ -72,11 +72,35 @@ export interface ChangeObservation {
   quality_score: number;
   thumbnail_url: string;
   distance_from_baseline: number;
-  mean_ndvi: number;
-  mean_ndwi: number;
-  mean_ndbi: number;
+  mean_ndvi: number | null;
+  mean_ndwi: number | null;
+  mean_ndbi: number | null;
+  modality?: "optical" | "sar";
+  is_valid?: boolean;
+  valid_pixel_fraction?: number;
+  change_signal?: number;
+  d_ndvi?: number | null;
+  d_ndwi?: number | null;
+  d_ndbi?: number | null;
+  registration?: {
+    is_aligned: boolean;
+    correlation_before: number;
+    correlation_after: number;
+    inliers: number;
+    dx: number;
+    dy: number;
+    method?: string;
+  };
+  radiometric_normalization?: {
+    method: string;
+    mean_delta_before: number;
+    mean_delta_after: number;
+    improved: boolean;
+  };
   is_baseline: boolean;
   is_earliest_change: boolean;
+  is_persistence_confirmation?: boolean;
+  is_transient?: boolean;
 }
 
 export interface EvidenceCheckItem {
@@ -87,9 +111,9 @@ export interface EvidenceCheckItem {
 }
 
 export interface EvidenceBundle {
-  d_ndvi: number;
-  d_ndwi: number;
-  d_ndbi: number;
+  d_ndvi: number | null;
+  d_ndwi: number | null;
+  d_ndbi: number | null;
   persistence_count: number;
   total_observations: number;
   valid_pixel_ratio: number;
@@ -126,8 +150,7 @@ export interface ChangeRegionItem {
 export interface ChangeDetectionResponse {
   status: string;
   is_fallback?: boolean;
-  result_source?: "backend" | "demo-fallback";
-  fallback_reason?: string;
+  result_source?: "backend";
   message?: string;
   change_id?: string;
   dominant_change_type?: string;
@@ -143,6 +166,22 @@ export interface ChangeDetectionResponse {
   change_mask_path?: string;
   change_mask_url?: string;
   earliest_supported_observation?: string;
+  confirmed_observation?: string;
+  temporal_uncertainty_days?: number;
+  confirmation_lag_days?: number;
+  persistence?: {
+    status: string;
+    baseline_n: number;
+    persistence_k: number;
+    threshold: number;
+    earliest_supported_observation?: string | null;
+    confirmed_observation?: string | null;
+    last_clear_observation?: string | null;
+    temporal_uncertainty_days?: number | null;
+    confirmation_lag_days?: number | null;
+    transient_count: number;
+    log: Array<Record<string, unknown>>;
+  };
   observations?: ChangeObservation[];
   evidence?: EvidenceBundle;
   confidence_breakdown?: {
@@ -173,7 +212,7 @@ export interface SystemStatus {
   offline_mode: boolean;
   processing_version: string;
   models: {
-    remoteclip: { staged: boolean; active_model: string };
+    remoteclip: { staged: boolean; loaded?: boolean; available?: boolean | null; active_model: string; model_version?: string | null };
     prithvi: { staged: boolean; active_model: string };
   };
   paths?: {
@@ -195,6 +234,14 @@ export interface SystemStatus {
   embedding_model_version?: string;
   stored_embedding_model_versions?: string[];
   embedding_version_warning?: boolean;
+  record_counts?: { scenes: number; tiles: number; changes: number; feedback: number };
+  security_guards?: {
+    offline_mode_configured: boolean;
+    basemap_outbound_fetch_enabled: boolean;
+    hf_hub_offline: boolean;
+    transformers_offline: boolean;
+    proj_network_off: boolean;
+  };
 }
 
 export interface ChatContext {
@@ -350,148 +397,12 @@ export async function getDiscoveryClusters(
     params.set("lon", String(lon));
     params.set("lat", String(lat));
   }
-  try {
-    const res = await fetch(`${API_BASE}/api/discovery?${params.toString()}`);
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (err) {
-    console.warn("Backend discovery unavailable, providing local spectral clusters:", err);
+  const res = await fetch(`${API_BASE}/api/discovery?${params.toString()}`);
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || `Discovery failed: ${res.status}`);
   }
-
-  return getDemoDiscoveryClusters(tileId, lon, lat);
-}
-
-function getDemoDiscoveryClusters(tileId?: string, lon: number = 88.4, lat: number = 22.5): DiscoveryResponse {
-  const baseLon = lon || 88.4;
-  const baseLat = lat || 22.5;
-
-  const cluster1Sites: SearchResult[] = [
-    {
-      tile_id: `disc-s1-${Math.floor(Math.abs(baseLon) * 1000)}-${Math.floor(Math.abs(baseLat) * 1000)}`,
-      scene_id: "S2_2026_0518_T43RER",
-      lon: baseLon + 0.012,
-      lat: baseLat + 0.008,
-      similarity_score: 0.94,
-      final_score: 0.92,
-      score_breakdown: { semantic: 0.94, quality: 0.96 },
-      sensor: "Sentinel-2 MSI",
-      acquisition_date: "2026-05-18",
-      classification_label: "High-density Structural Development",
-      quality_score: 0.96,
-      cloud_fraction: 0.02,
-      thumbnail_path: "/icon.svg",
-      embedding_model: "RemoteCLIP-ViT-B32",
-      embedding_is_placeholder: false,
-    },
-    {
-      tile_id: `disc-s2-${Math.floor(Math.abs(baseLon) * 1000)}-${Math.floor(Math.abs(baseLat) * 1000)}`,
-      scene_id: "S2_2026_0518_T43RER",
-      lon: baseLon - 0.015,
-      lat: baseLat + 0.011,
-      similarity_score: 0.89,
-      final_score: 0.87,
-      score_breakdown: { semantic: 0.89, quality: 0.93 },
-      sensor: "Sentinel-2 MSI",
-      acquisition_date: "2026-05-18",
-      classification_label: "Commercial Paved Structure",
-      quality_score: 0.93,
-      cloud_fraction: 0.03,
-      thumbnail_path: "/icon.svg",
-      embedding_model: "RemoteCLIP-ViT-B32",
-      embedding_is_placeholder: false,
-    },
-    {
-      tile_id: `disc-s3-${Math.floor(Math.abs(baseLon) * 1000)}-${Math.floor(Math.abs(baseLat) * 1000)}`,
-      scene_id: "LC08_2026_0315_146040",
-      lon: baseLon + 0.022,
-      lat: baseLat - 0.014,
-      similarity_score: 0.85,
-      final_score: 0.84,
-      score_breakdown: { semantic: 0.85, quality: 0.91 },
-      sensor: "Landsat-8 OLI",
-      acquisition_date: "2026-03-15",
-      classification_label: "Industrial Infrastructure Site",
-      quality_score: 0.91,
-      cloud_fraction: 0.04,
-      thumbnail_path: "/icon.svg",
-      embedding_model: "RemoteCLIP-ViT-B32",
-      embedding_is_placeholder: false,
-    },
-  ];
-
-  const cluster2Sites: SearchResult[] = [
-    {
-      tile_id: `disc-s4-${Math.floor(Math.abs(baseLon) * 1000)}-${Math.floor(Math.abs(baseLat) * 1000)}`,
-      scene_id: "S2_2026_0422_T43RER",
-      lon: baseLon - 0.025,
-      lat: baseLat - 0.018,
-      similarity_score: 0.82,
-      final_score: 0.81,
-      score_breakdown: { semantic: 0.82, quality: 0.94 },
-      sensor: "Sentinel-2 MSI",
-      acquisition_date: "2026-04-22",
-      classification_label: "Cleared Ground & Corridor Excavation",
-      quality_score: 0.94,
-      cloud_fraction: 0.02,
-      thumbnail_path: "/icon.svg",
-      embedding_model: "RemoteCLIP-ViT-B32",
-      embedding_is_placeholder: false,
-    },
-    {
-      tile_id: `disc-s5-${Math.floor(Math.abs(baseLon) * 1000)}-${Math.floor(Math.abs(baseLat) * 1000)}`,
-      scene_id: "S2_2024_0520_T43RER",
-      lon: baseLon + 0.031,
-      lat: baseLat + 0.024,
-      similarity_score: 0.79,
-      final_score: 0.78,
-      score_breakdown: { semantic: 0.79, quality: 0.92 },
-      sensor: "Sentinel-2 MSI",
-      acquisition_date: "2024-05-20",
-      classification_label: "Perimeter Transport Corridor",
-      quality_score: 0.92,
-      cloud_fraction: 0.05,
-      thumbnail_path: "/icon.svg",
-      embedding_model: "RemoteCLIP-ViT-B32",
-      embedding_is_placeholder: false,
-    },
-  ];
-
-  return {
-    embedding_model: "RemoteCLIP-ViT-B32",
-    embedding_is_placeholder: false,
-    total_candidates: cluster1Sites.length + cluster2Sites.length,
-    clusters: [
-      {
-        id: "cluster-1",
-        name: "Spectral Cluster #1: High-Density Development",
-        count: cluster1Sites.length,
-        centroid: [baseLon + 0.006, baseLat + 0.002],
-        confidence: 0.92,
-        dominantType: "Urban Expansion",
-        characteristics: [
-          "High ΔNDBI structural reflectance (> +0.35)",
-          "Low vegetation canopy (NDVI < 0.20)",
-          "Rectangular geometry & impervious coverage",
-        ],
-        sites: cluster1Sites,
-      },
-      {
-        id: "cluster-2",
-        name: "Spectral Cluster #2: Earthworks & Corridors",
-        count: cluster2Sites.length,
-        centroid: [baseLon + 0.003, baseLat + 0.003],
-        confidence: 0.86,
-        dominantType: "Infrastructure Corridor",
-        characteristics: [
-          "Linear elongated morphology",
-          "High surface brightness",
-          "Confirmed across multi-temporal passes",
-        ],
-        sites: cluster2Sites,
-      },
-    ],
-  };
+  return res.json();
 }
 
 export async function getReviewQueue(status?: ReviewQueueItem["status"], limit = 100): Promise<{ count: number; results: ReviewQueueItem[] }> {
@@ -508,67 +419,65 @@ export async function getReviewQueue(status?: ReviewQueueItem["status"], limit =
 export async function detectChange(lon: number, lat: number, dateFrom: string, dateTo: string, tileId?: string): Promise<ChangeDetectionResponse> {
   const params = new URLSearchParams({ lon: String(lon), lat: String(lat), date_from: dateFrom, date_to: dateTo });
   if (tileId) params.set("tile_id", tileId);
-  try {
-    const res = await fetch(`${API_BASE}/api/change/detect?${params.toString()}`);
-    if (res.ok) {
-      return await res.json();
-    }
-    const errData = await res.json().catch(() => ({}));
-    return { status: "error", message: errData.detail || `Change detection failed (${res.status})` };
-  } catch (err: any) {
-    console.warn("Backend change detect unavailable:", err);
-    return getDemoChangeResponse(lon, lat, dateFrom, dateTo);
-  }
+  params.set("baseline_n", "3");
+  params.set("persistence_k", "2");
+  const res = await fetch(`${API_BASE}/api/change/detect?${params.toString()}`);
+  if (res.ok) return res.json();
+  const errData = await res.json().catch(() => ({}));
+  return { status: "error", message: errData.detail || `Change detection failed (${res.status})` };
 }
 
-export async function submitFeedback(targetType: string, targetId: string, verdict: "confirm" | "reject", note?: string) {
-  try {
-    const res = await fetch(`${API_BASE}/api/feedback`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target_type: targetType, target_id: targetId, verdict, note }),
-    });
-    if (res.ok) return res.json();
-  } catch (err) {
-    console.warn("Backend feedback unavailable, simulating local log:", err);
+export async function submitFeedback(targetType: string, targetId: string, verdict: "confirm" | "reject", note?: string, analyst?: string) {
+  const res = await fetch(`${API_BASE}/api/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target_type: targetType, target_id: targetId, verdict, note, analyst }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail || `Feedback failed: ${res.status}`);
   }
-  return { feedback_id: "local-" + Date.now(), status: "recorded", verdict, note };
+  return res.json();
 }
 
 export async function getSystemStatus(): Promise<SystemStatus> {
-  try {
-    const res = await fetch(`${API_BASE}/api/system/status`);
-    if (res.ok) return res.json();
-  } catch (e) { }
-  return {
-    offline_mode: true,
-    processing_version: "2.2.0-airgapped",
-    models: {
-      remoteclip: { staged: true, active_model: "remoteclip-vit-b32-local" },
-      prithvi: { staged: false, active_model: "placeholder-diff" },
-    },
-    paths: {
-      model_dir: "/models/weights",
-      data_dir: "/data",
-    }
-  };
+  const res = await fetch(`${API_BASE}/api/system/status`);
+  if (!res.ok) throw new Error(`System status failed: ${res.status}`);
+  return res.json();
 }
 
 export async function listScenes() {
-  try {
-    const res = await fetch(`${API_BASE}/api/ingest/scenes`);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) return data;
-    }
-  } catch (e) { }
-
-  return getDemoScenes();
+  const res = await fetch(`${API_BASE}/api/ingest/scenes`);
+  if (!res.ok) throw new Error(`Scene catalog failed: ${res.status}`);
+  return res.json();
 }
 
 export async function processIncoming() {
   const res = await fetch(`${API_BASE}/api/ingest/process-incoming`, { method: "POST" });
-  if (!res.ok) throw new Error(`Process-incoming failed: ${res.status}`);
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.detail?.message || error.detail || `Process-incoming failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export interface IngestionJob {
+  job_id: string;
+  status: "running" | "complete" | "failed";
+  phase: string;
+  message: string;
+  current_file: string | null;
+  scene_position: number;
+  scene_total: number;
+  stage_progress: Record<string, number>;
+  processed: any[];
+  skipped: any[];
+  failed: any[];
+}
+
+export async function fetchIngestionJob(jobId: string): Promise<IngestionJob> {
+  const res = await fetch(`${API_BASE}/api/ingest/jobs/${jobId}`);
+  if (!res.ok) throw new Error(`Ingestion job telemetry failed: ${res.status}`);
   return res.json();
 }
 
@@ -582,9 +491,10 @@ export interface IngestMetrics {
   elapsed_seconds: number;
 }
 
-export async function uploadFileAndIngest(file: File) {
+export async function uploadFileAndIngest(file: File, provenance: File) {
   const form = new FormData();
   form.append("file", file);
+  form.append("provenance", provenance);
   const res = await fetch(`${API_BASE}/api/ingest/upload`, { method: "POST", body: form });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -609,8 +519,11 @@ export function thumbnailUrl(path: string | null): string {
 
 export function exportGeoJSON(items: SearchResult[] | ChangeRegionItem[], filename = "terrex_export.geojson") {
   const features = items.map((item: any, idx: number) => {
-    const lon = item.lon ?? (item.centroid ? item.centroid[0] : 77.25);
-    const lat = item.lat ?? (item.centroid ? item.centroid[1] : 28.55);
+    const lon = item.lon ?? item.centroid?.[0];
+    const lat = item.lat ?? item.centroid?.[1];
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
+      throw new Error(`Cannot export item ${idx + 1}: coordinates are unavailable.`);
+    }
     return {
       type: "Feature",
       geometry: {
@@ -619,11 +532,11 @@ export function exportGeoJSON(items: SearchResult[] | ChangeRegionItem[], filena
       },
       properties: {
         id: item.tile_id || `region-${idx + 1}`,
-        similarity: item.similarity_score ?? item.confidence ?? 0.85,
-        sensor: item.sensor ?? "Sentinel-2",
-        acquisition_date: item.acquisition_date ?? "2026-05-18",
-        change_type: item.change_type ?? item.classification_label ?? "Construction",
-        cloud_fraction: item.cloud_fraction ?? 0.03,
+        similarity: item.similarity_score ?? item.confidence ?? null,
+        sensor: item.sensor ?? null,
+        acquisition_date: item.acquisition_date ?? null,
+        change_type: item.change_type ?? item.classification_label ?? null,
+        cloud_fraction: item.cloud_fraction ?? null,
         source_portal: item.source_portal ?? item.provenance?.source_portal ?? null,
         underlying_dataset: item.underlying_dataset ?? item.provenance?.underlying_dataset ?? null,
         license: item.license ?? item.provenance?.license ?? null,
@@ -648,11 +561,11 @@ export function exportCSV(items: any[], filename = "terrex_report.csv") {
     r.tile_id || r.id || "N/A",
     r.lon ?? (r.centroid ? r.centroid[0] : "N/A"),
     r.lat ?? (r.centroid ? r.centroid[1] : "N/A"),
-    r.sensor ?? "Sentinel-2",
-    r.acquisition_date ?? r.dateRange ?? "2026-05-18",
-    ((r.final_score ?? r.confidence ?? 0.85) * 100).toFixed(1) + "%",
-    r.change_type ?? r.classification_label ?? r.type ?? "Construction",
-    (r.cloud_cover_pct ?? ((r.cloud_fraction ?? 0.03) * 100)).toFixed(1) + "%",
+    r.sensor ?? "N/A",
+    r.acquisition_date ?? r.dateRange ?? "N/A",
+    r.final_score == null && r.confidence == null ? "N/A" : `${((r.final_score ?? r.confidence) * 100).toFixed(1)}%`,
+    r.change_type ?? r.classification_label ?? r.type ?? "N/A",
+    r.cloud_cover_pct == null && r.cloud_fraction == null ? "N/A" : `${(r.cloud_cover_pct ?? r.cloud_fraction * 100).toFixed(1)}%`,
     r.source_portal ?? r.provenance?.source_portal ?? "",
     r.underlying_dataset ?? r.provenance?.underlying_dataset ?? "",
     r.license ?? r.provenance?.license ?? "",
@@ -663,27 +576,13 @@ export function exportCSV(items: any[], filename = "terrex_report.csv") {
 }
 
 export async function computeSHA256(data: string): Promise<string> {
-  try {
-    if (typeof window !== "undefined" && window.crypto && window.crypto.subtle) {
-      const msgBuffer = new TextEncoder().encode(data);
-      const hashBuffer = await window.crypto.subtle.digest("SHA-256", msgBuffer);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-    }
-  } catch (e) {
-    console.warn("WebCrypto SHA-256 unavailable, using fallback hash", e);
+  if (typeof window === "undefined" || !window.crypto?.subtle) {
+    throw new Error("WebCrypto SHA-256 is unavailable; export stopped rather than emitting a non-cryptographic substitute.");
   }
-  // Deterministic 64-char hex hash fallback
-  let h1 = 0xdeadbeef, h2 = 0x41c6ce57, h3 = 0x9e3779b9, h4 = 0x85ebca6b;
-  for (let i = 0; i < data.length; i++) {
-    const ch = data.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-    h3 = Math.imul(h3 ^ ch, 2246822507);
-    h4 = Math.imul(h4 ^ ch, 3266489909);
-  }
-  const toHex = (n: number) => (n >>> 0).toString(16).padStart(8, "0");
-  return `${toHex(h1)}${toHex(h2)}${toHex(h3)}${toHex(h4)}${toHex(h1 ^ h3)}${toHex(h2 ^ h4)}${toHex(h1 + h2)}${toHex(h3 + h4)}`;
+  const msgBuffer = new TextEncoder().encode(data);
+  const hashBuffer = await window.crypto.subtle.digest("SHA-256", msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export interface ExportPDFOptions {
@@ -695,6 +594,13 @@ export interface ExportPDFOptions {
   selectedRegion?: ChangeRegionItem | null;
 }
 
+function requireRealChange(change?: ChangeDetectionResponse | null): ChangeDetectionResponse {
+  if (!change || change.status !== "ok" || change.result_source !== "backend") {
+    throw new Error("A completed backend change analysis is required before evidence can be exported.");
+  }
+  return change;
+}
+
 export async function exportForensicPDF(
   result: SearchResult,
   change?: ChangeDetectionResponse | null,
@@ -702,9 +608,9 @@ export async function exportForensicPDF(
 ): Promise<void> {
   if (typeof window === "undefined") return;
 
-  const effChange = change && change.status === "ok" ? change : getDemoChangeResponse(result.lon, result.lat, options?.dateFrom || "2024-05-20", options?.dateTo || result.acquisition_date || "2026-05-18");
-  const verdict = options?.verdict ? options.verdict.toUpperCase() : "CONFIRMED";
-  const analystNote = options?.analystNote?.trim() || "Multi-temporal satellite observation verified against baseline stack. Structural expansion confirmed with spectral delta correlation.";
+  const effChange = requireRealChange(change);
+  const verdict = options?.verdict ? options.verdict.toUpperCase() : "UNREVIEWED";
+  const analystNote = options?.analystNote?.trim() || "No analyst note supplied.";
   const genTimestamp = new Date().toISOString();
   
   // Compute real SHA-256 hash across target metadata, change metrics and analyst notes
@@ -723,19 +629,24 @@ export async function exportForensicPDF(
   });
   const sha256Hash = await computeSHA256(rawPayload);
 
-  const t0Date = effChange.before?.acquisition_date?.slice(0, 10) || options?.dateFrom || "2024-05-20";
-  const t1Date = effChange.after?.acquisition_date?.slice(0, 10) || options?.dateTo || result.acquisition_date?.slice(0, 10) || "2026-05-18";
+  const t0Date = effChange.before?.acquisition_date?.slice(0, 10) || options?.dateFrom || "UNAVAILABLE";
+  const t1Date = effChange.after?.acquisition_date?.slice(0, 10) || options?.dateTo || result.acquisition_date?.slice(0, 10) || "UNAVAILABLE";
   
   const beforeThumb = effChange.before?.thumbnail_url || effChange.before?.thumbnail_path ? thumbnailUrl(effChange.before?.thumbnail_url || effChange.before?.thumbnail_path || "") : "";
   const afterThumb = effChange.after?.thumbnail_url || effChange.after?.thumbnail_path ? thumbnailUrl(effChange.after?.thumbnail_url || effChange.after?.thumbnail_path || "") : thumbnailUrl(result.thumbnail_path);
 
-  const dNdvi = effChange.change_regions?.[0]?.mean_d_ndvi ?? -0.38;
-  const dNdbi = effChange.change_regions?.[0]?.mean_d_ndbi ?? 0.42;
-  const dNdwi = effChange.change_regions?.[0]?.mean_d_ndwi ?? -0.04;
-  const regCorr = effChange.registration?.correlation_after ?? 0.96;
-  const regDx = effChange.registration?.dx ?? 1.2;
-  const regDy = effChange.registration?.dy ?? -0.8;
-  const inliers = effChange.registration?.inliers ?? 94;
+  const dNdvi = effChange.change_regions?.[0]?.mean_d_ndvi;
+  const dNdbi = effChange.change_regions?.[0]?.mean_d_ndbi;
+  const dNdwi = effChange.change_regions?.[0]?.mean_d_ndwi;
+  const regCorr = effChange.registration?.correlation_after;
+  const regDx = effChange.registration?.dx;
+  const regDy = effChange.registration?.dy;
+  const inliers = effChange.registration?.inliers;
+  const signed = (value: number | undefined, digits: number) => value == null ? "N/A" : `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
+  const regCorrLabel = regCorr == null ? "N/A" : `${(regCorr * 100).toFixed(1)}%`;
+  const areaLabel = effChange.change_area_m2 == null
+    ? "N/A"
+    : `${effChange.change_area_m2.toLocaleString()} m² (${(effChange.change_area_m2 / 10000).toFixed(2)} ha)`;
 
   const htmlContent = `<!DOCTYPE html>
 <html lang="en">
@@ -743,8 +654,6 @@ export async function exportForensicPDF(
   <meta charset="UTF-8">
   <title>TERREX FORENSIC INTELLIGENCE DOSSIER — ${result.tile_id}</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-    
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       background-color: #0c0e12;
@@ -1097,7 +1006,7 @@ export async function exportForensicPDF(
           </div>
           <div class="kpi-card">
             <div class="kpi-label">DATA QUALITY</div>
-            <div class="kpi-val kpi-cyan">${result.quality_score == null ? "94.2%" : `${(result.quality_score * 100).toFixed(1)}%`}</div>
+            <div class="kpi-val kpi-cyan">${result.quality_score == null ? "N/A" : `${(result.quality_score * 100).toFixed(1)}%`}</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">CLOUD COVER</div>
@@ -1168,26 +1077,26 @@ export async function exportForensicPDF(
         <div class="grid-4" style="margin-bottom: 12px;">
           <div class="kpi-card">
             <div class="kpi-label">CROSS-CORRELATION</div>
-            <div class="kpi-val kpi-highlight">${(regCorr * 100).toFixed(1)}%</div>
+            <div class="kpi-val kpi-highlight">${regCorrLabel}</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">MATCHED INLIERS</div>
-            <div class="kpi-val">${inliers} Keypoints</div>
+            <div class="kpi-val">${inliers == null ? "N/A" : `${inliers} Keypoints`}</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">RESIDUAL SHIFT &Delta;X</div>
-            <div class="kpi-val">${regDx > 0 ? `+${regDx.toFixed(2)}` : regDx.toFixed(2)} px</div>
+            <div class="kpi-val">${regDx == null ? "N/A" : `${signed(regDx, 2)} px`}</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">RESIDUAL SHIFT &Delta;Y</div>
-            <div class="kpi-val">${regDy > 0 ? `+${regDy.toFixed(2)}` : regDy.toFixed(2)} px</div>
+            <div class="kpi-val">${regDy == null ? "N/A" : `${signed(regDy, 2)} px`}</div>
           </div>
         </div>
         
         <div style="background: #0d1117; border: 1px solid #1e293b; padding: 10px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 10px;">
           <div style="color: #64748b; margin-bottom: 4px;">ESTIMATED 3x3 HOMOGRAPHY WARP MATRIX:</div>
-          <div style="color: #38bdf8;">[ 1.000214  -0.000142  ${regDx > 0 ? `+${regDx.toFixed(3)}` : regDx.toFixed(3)} ]</div>
-          <div style="color: #38bdf8;">[ +0.000183  0.999872  ${regDy > 0 ? `+${regDy.toFixed(3)}` : regDy.toFixed(3)} ]</div>
+          <div style="color: #38bdf8;">Measured X translation: ${signed(regDx, 3)} px</div>
+          <div style="color: #38bdf8;">Measured Y translation: ${signed(regDy, 3)} px</div>
           <div style="color: #38bdf8;">[ 0.000000   0.000000   1.000000 ]</div>
         </div>
       </div>
@@ -1203,17 +1112,17 @@ export async function exportForensicPDF(
         <div class="grid-3" style="margin-bottom: 12px;">
           <div class="kpi-card">
             <div class="kpi-label">&Delta;NDBI (BUILT-UP / CONCRETE)</div>
-            <div class="kpi-val" style="color: #f59e0b;">${dNdbi > 0 ? `+${dNdbi.toFixed(3)}` : dNdbi.toFixed(3)}</div>
+            <div class="kpi-val" style="color: #f59e0b;">${signed(dNdbi, 3)}</div>
             <div style="font-size: 9px; color: #94a3b8; margin-top: 2px;">Structural / Impervious Additions</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">&Delta;NDVI (VEGETATION CANOPY)</div>
-            <div class="kpi-val" style="color: #ef4444;">${dNdvi > 0 ? `+${dNdvi.toFixed(3)}` : dNdvi.toFixed(3)}</div>
+            <div class="kpi-val" style="color: #ef4444;">${signed(dNdvi, 3)}</div>
             <div style="font-size: 9px; color: #94a3b8; margin-top: 2px;">Canopy Loss / Ground Clearance</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">&Delta;NDWI (WATER & MOISTURE)</div>
-            <div class="kpi-val kpi-cyan">${dNdwi > 0 ? `+${dNdwi.toFixed(3)}` : dNdwi.toFixed(3)}</div>
+            <div class="kpi-val kpi-cyan">${signed(dNdwi, 3)}</div>
             <div style="font-size: 9px; color: #94a3b8; margin-top: 2px;">Hydrological / Surface Moisture</div>
           </div>
         </div>
@@ -1221,7 +1130,7 @@ export async function exportForensicPDF(
         <div class="grid-2">
           <div class="kpi-card">
             <div class="kpi-label">TOTAL ESTIMATED CHANGE AREA</div>
-            <div class="kpi-val kpi-highlight">${(effChange.change_area_m2 ?? 4820).toLocaleString()} m² (${(((effChange.change_area_m2 ?? 4820)) / 10000).toFixed(2)} ha)</div>
+            <div class="kpi-val kpi-highlight">${areaLabel}</div>
           </div>
           <div class="kpi-card">
             <div class="kpi-label">CHANGE CLASSIFICATION TYPE</div>
@@ -1246,11 +1155,11 @@ export async function exportForensicPDF(
           </div>
           <div class="check-item">
             <span class="check-icon">[✓]</span>
-            <span>Sub-pixel FFT Registration: Alignment score ${(regCorr * 100).toFixed(1)}% exceeds tactical 90% threshold.</span>
+            <span>Co-registration: measured alignment correlation ${regCorrLabel}; inliers ${inliers ?? "N/A"}.</span>
           </div>
           <div class="check-item">
             <span class="check-icon">[✓]</span>
-            <span>Multi-Spectral Anomaly Profile: Coincident &Delta;NDBI increase (+${dNdbi.toFixed(2)}) and &Delta;NDVI decrease (${dNdvi.toFixed(2)}) signifies heavy mechanical land transformation.</span>
+            <span>Multi-spectral onset deltas: &Delta;NDBI ${signed(dNdbi, 2)}, &Delta;NDVI ${signed(dNdvi, 2)}, &Delta;NDWI ${signed(dNdwi, 2)}.</span>
           </div>
         </div>
 
@@ -1316,7 +1225,7 @@ export async function exportForensicPDF(
         <div class="verdict-box">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <div class="verdict-badge">${verdict === "CONFIRMED" ? "✓ CONFIRMED GROUND CHANGE" : "✕ REJECTED / FALSE ALARM"}</div>
-            <div class="font-mono" style="font-size: 10px; color: #94a3b8;">STATION: ANALYST-ISRO-042</div>
+            <div class="font-mono" style="font-size: 10px; color: #94a3b8;">ANALYST IDENTITY: NOT CAPTURED BY THIS EXPORT</div>
           </div>
           <div style="font-size: 11px; color: #e2e8f0; line-height: 1.6; margin-top: 6px;">
             <strong>Analyst Notes:</strong> ${analystNote}
@@ -1377,11 +1286,14 @@ export async function exportAnalystReport(
   analystNote?: string,
   verdict?: string
 ) {
-  const effChange = change && change.status === "ok" ? change : getDemoChangeResponse(result.lon, result.lat, "2024-05-20", result.acquisition_date || "2026-05-18");
-  const effVerdict = verdict ? verdict.toUpperCase() : "CONFIRMED";
-  const effNote = analystNote?.trim() || "Multi-temporal satellite observation verified against baseline stack.";
+  const effChange = requireRealChange(change);
+  const effVerdict = verdict ? verdict.toUpperCase() : "UNREVIEWED";
+  const effNote = analystNote?.trim() || "No analyst note supplied.";
   const genTimestamp = new Date().toISOString();
   const sha256 = await computeSHA256(JSON.stringify({ result, effChange, effVerdict, effNote, genTimestamp }));
+  const region = effChange.change_regions?.[0];
+  const metric = (value: number | undefined | null, digits = 3) => value == null ? "N/A" : value.toFixed(digits);
+  const area = effChange.change_area_m2 == null ? "N/A" : `${effChange.change_area_m2.toLocaleString()} m² (${(effChange.change_area_m2 / 10000).toFixed(2)} ha)`;
 
   const content = `# TERREX GEOSPATIAL INTELLIGENCE DOSSIER
 **Document ID:** DOSSIER-${result.tile_id}
@@ -1390,10 +1302,10 @@ export async function exportAnalystReport(
 **Target ID:** ${result.tile_id}
 **Coordinates:** ${result.lat.toFixed(5)}°N, ${result.lon.toFixed(5)}°E (EPSG:4326)
 **Primary Sensor:** ${result.sensor ?? "Sentinel-2 MSI (10m)"}
-**Acquisition Date:** ${result.acquisition_date ?? "2026-05-18"}
-**Source Portal:** ${result.source_portal ?? result.provenance?.source_portal ?? "ISRO / ESA Payload Archive"}
-**Underlying Dataset:** ${result.underlying_dataset ?? result.provenance?.underlying_dataset ?? "Sentinel-2 L2A"}
-**License:** ${result.license ?? result.provenance?.license ?? "Open Access / Government"}
+**Acquisition Date:** ${result.acquisition_date ?? "UNAVAILABLE"}
+**Source Portal:** ${result.source_portal ?? result.provenance?.source_portal ?? "UNAVAILABLE"}
+**Underlying Dataset:** ${result.underlying_dataset ?? result.provenance?.underlying_dataset ?? "UNAVAILABLE"}
+**License:** ${result.license ?? result.provenance?.license ?? "UNAVAILABLE"}
 **Classification:** ${result.classification_label ?? (result.location_name ? `${result.location_name} Observation` : "Candidate Target Site")}
 **Composite Relevance Score:** ${(result.final_score * 100).toFixed(1)}%
 
@@ -1401,43 +1313,40 @@ export async function exportAnalystReport(
 
 ### 1. OBSERVATION & RADIOMETRIC QUALITY
 - Semantic Match Score (RemoteCLIP ViT-B32): ${(result.similarity_score * 100).toFixed(1)}%
-- Optical Quality Score: ${(result.quality_score ?? 0.94).toFixed(3)}
-- Cloud Cover Fraction: ${((result.cloud_fraction ?? 0.03) * 100).toFixed(1)}%
+- Optical Quality Score: ${metric(result.quality_score)}
+- Cloud Cover Fraction: ${result.cloud_fraction == null ? "N/A" : `${(result.cloud_fraction * 100).toFixed(1)}%`}
 - Processing Engine: RemoteCLIP-ViT-B32 / Local Offline Weights
 
 ---
 
 ### 2. BITEMPORAL CHANGE & SUB-PIXEL REGISTRATION
 - Dominant Change Type: ${effChange.dominant_change_type?.toUpperCase() ?? "CONSTRUCTION"}
-- Change Confidence: ${((effChange.confidence ?? 0.89) * 100).toFixed(1)}%
-- Estimated Affected Area: ${(effChange.change_area_m2 ?? 4820).toLocaleString()} m² (${(((effChange.change_area_m2 ?? 4820)) / 10000).toFixed(2)} ha)
-- Earliest Supported Observation: ${effChange.earliest_supported_observation?.slice(0, 10) ?? "2025-09-14"}
-- Sub-pixel Co-Registration: ${effChange.registration?.is_aligned ? "Aligned (ORB + Homography Warp)" : "Residual Corrected"} (Corr: ${(effChange.registration?.correlation_after ?? 0.96).toFixed(2)})
-- Residual Pixel Shift: Δx = ${effChange.registration?.dx ?? 1.2} px, Δy = ${effChange.registration?.dy ?? -0.8} px (Inliers: ${effChange.registration?.inliers ?? 94})
+- Change Confidence: ${effChange.confidence == null ? "N/A" : `${(effChange.confidence * 100).toFixed(1)}%`}
+- Estimated Affected Area: ${area}
+- Earliest Supported Observation: ${effChange.earliest_supported_observation?.slice(0, 10) ?? "UNAVAILABLE"}
+- Persistence Confirmation Observation: ${effChange.confirmed_observation?.slice(0, 10) ?? "UNAVAILABLE"}
+- Temporal Uncertainty: ${effChange.temporal_uncertainty_days == null ? "N/A" : `${effChange.temporal_uncertainty_days} days`}
+- Sub-pixel Co-Registration: ${effChange.registration?.is_aligned === true ? "Aligned" : effChange.registration ? "Not aligned" : "N/A"} (Corr: ${metric(effChange.registration?.correlation_after, 2)})
+- Residual Pixel Shift: Δx = ${metric(effChange.registration?.dx)} px, Δy = ${metric(effChange.registration?.dy)} px (Inliers: ${effChange.registration?.inliers ?? "N/A"})
 
 ---
 
 ### 3. MULTI-SPECTRAL RADIOMETRIC INDICES
-- Built-up Index Delta (ΔNDBI): +${(effChange.change_regions?.[0]?.mean_d_ndbi ?? 0.42).toFixed(3)} (Structural / Concrete Addition)
-- Vegetation Index Delta (ΔNDVI): ${(effChange.change_regions?.[0]?.mean_d_ndvi ?? -0.38).toFixed(3)} (Canopy Clearance)
-- Water Index Delta (ΔNDWI): ${(effChange.change_regions?.[0]?.mean_d_ndwi ?? -0.04).toFixed(3)} (Moisture Reduction)
+- Built-up Index Delta (ΔNDBI): ${metric(region?.mean_d_ndbi)}
+- Vegetation Index Delta (ΔNDVI): ${metric(region?.mean_d_ndvi)}
+- Water Index Delta (ΔNDWI): ${metric(region?.mean_d_ndwi)}
 
 ---
 
 ### 4. VERIFIABLE EXPLAINABLE EVIDENCE (XAI)
-- [x] Change verified across multiple consecutive satellite passes (3 passes)
-- [x] Cloud contamination < 5% (clear sky optical observation)
-- [x] Built-up index delta exceedance: ΔNDBI = +0.42 (High structural addition)
-- [x] Vegetation index delta exceedance: ΔNDVI = -0.38 (Vegetation conversion)
-- [x] Seasonal phenology variations rejected by baseline stack normalization
-- [x] Viewing-angle and solar illumination mismatch suppressed via homography
+${(effChange.evidence?.items || []).map(item => `- [${item.status === "pass" ? "x" : " "}] ${item.label}: ${item.value} — ${item.details}`).join("\n") || "- No structured evidence checklist was supplied by the backend."}
 
 ---
 
 ### 5. HUMAN-IN-THE-LOOP OPERATOR AUDIT
 - **Verdict:** ${effVerdict}
 - **Operator Notes:** ${effNote}
-- **Operator ID:** ANALYST-ISRO-042
+- **Operator ID:** Not captured by this export
 
 ---
 
@@ -1455,25 +1364,25 @@ export async function exportEvidencePackage(
   analystNote?: string,
   verdict?: string
 ) {
-  const effChange = change && change.status === "ok" ? change : getDemoChangeResponse(result.lon, result.lat, "2024-05-20", result.acquisition_date || "2026-05-18");
-  const effVerdict = verdict ? verdict.toUpperCase() : "CONFIRMED";
-  const effNote = analystNote?.trim() || "Multi-temporal satellite observation verified against baseline stack.";
+  const effChange = requireRealChange(change);
+  const effVerdict = verdict ? verdict.toUpperCase() : "UNREVIEWED";
+  const effNote = analystNote?.trim() || "No analyst note supplied.";
   const genTimestamp = new Date().toISOString();
 
   const pkgWithoutHash = {
     report_metadata: {
       generated_at: genTimestamp,
       system: "TerreX Geospatial Intelligence Platform",
-      mode: "AIR-GAPPED_DEFENSE_CONSOLE",
-      version: "2.2.0-production",
-      crs: "EPSG:4326 / UTM 45N",
-      analyst_operator: "ANALYST-ISRO-042",
+      mode: "LOCAL_EVIDENCE_EXPORT",
+      version: null,
+      crs: "EPSG:4326",
+      analyst_operator: null,
     },
     target: result,
     source_provenance: result.provenance ?? {
-      source_portal: result.source_portal ?? "ISRO / ESA Payload Archive",
-      underlying_dataset: result.underlying_dataset ?? "Sentinel-2 L2A",
-      license: result.license ?? "Open Access / Government",
+      source_portal: result.source_portal ?? null,
+      underlying_dataset: result.underlying_dataset ?? null,
+      license: result.license ?? null,
       acquisition_date: result.acquisition_date ?? null,
     },
     change_analysis: effChange,
@@ -1483,14 +1392,14 @@ export async function exportEvidencePackage(
       recorded_at: genTimestamp,
     },
     provenance_chain: [
-      { step: "ingestion", timestamp: "2026-05-18T10:14:22Z", status: "VALIDATED", sensor: result.sensor ?? "Sentinel-2" },
-      { step: "tiling", tile_size: 256, crs: "EPSG:32645", resolution_m: 10.0 },
-      { step: "embedding", model: "RemoteCLIP-ViT-B32", dim: 512, offline_weights: true },
-      { step: "co_registration", method: "ORB_RANSAC_HOMOGRAPHY", inliers: 94, correlation: 0.96 },
-      { step: "radiometric_norm", method: "HISTOGRAM_MATCHING_PERCENTILE" },
-      { step: "spectral_indices", delta_ndbi: 0.42, delta_ndvi: -0.38, delta_ndwi: -0.04 },
-      { step: "false_alarm_suppression", rule_evaluations: 6, suppressed_flags: ["seasonal", "view_angle", "haze"] },
-      { step: "classification", final_class: effChange.dominant_change_type || "construction", confidence: effChange.confidence || 0.91 },
+      { step: "ingestion", acquisition_timestamp: result.acquisition_date ?? null, sensor: result.sensor ?? null, provenance: result.provenance ?? null },
+      { step: "embedding", model: result.embedding_model ?? null, placeholder: result.embedding_is_placeholder ?? null },
+      { step: "co_registration", ...(effChange.registration ?? { status: "not_reported" }) },
+      { step: "radiometric_norm", verification: effChange.evidence?.radiometric_diff ?? null },
+      { step: "spectral_indices", delta_ndbi: effChange.evidence?.d_ndbi ?? null, delta_ndvi: effChange.evidence?.d_ndvi ?? null, delta_ndwi: effChange.evidence?.d_ndwi ?? null },
+      { step: "persistence", ...(effChange.persistence ?? { status: "not_reported" }) },
+      { step: "false_alarm_suppression", reasons: effChange.suppression_reasons ?? [] },
+      { step: "classification", final_class: effChange.dominant_change_type ?? null, confidence: effChange.confidence ?? null },
     ],
   };
 
@@ -1514,141 +1423,6 @@ function downloadFile(content: string, filename: string, mimeType: string) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-}
-
-export function getDemoChangeResponse(lon: number, lat: number, dateFrom: string, dateTo: string): ChangeDetectionResponse {
-  return {
-    status: "ok",
-    is_fallback: true,
-    result_source: "demo-fallback",
-    fallback_reason: "Live change detection was unavailable.",
-    dominant_change_type: "construction",
-    change_id: "chg-" + Math.floor(lon * 100) + "-" + Math.floor(lat * 100),
-    before: {
-      acquisition_date: dateFrom || "2024-05-20",
-      thumbnail_path: "/icon.svg",
-      sensor: "Sentinel-2 MSI",
-    },
-    after: {
-      acquisition_date: dateTo || "2026-05-18",
-      thumbnail_path: "/icon.svg",
-      sensor: "Sentinel-2 MSI",
-    },
-    change_score: 0.89,
-    quality_score: 0.96,
-    confidence: 0.91,
-    change_area_m2: 4820,
-    earliest_supported_observation: "2025-09-14T00:00:00Z",
-    registration: {
-      is_aligned: true,
-      correlation_before: 0.72,
-      correlation_after: 0.96,
-      inliers: 94,
-      dx: 1.2,
-      dy: -0.8,
-    },
-    change_regions: [
-      {
-        region_id: 1,
-        change_type: "construction",
-        confidence: 0.94,
-        area_pixels: 482,
-        area_m2: 4820,
-        centroid: [lon, lat],
-        bbox: [lon - 0.002, lat - 0.002, lon + 0.002, lat + 0.002],
-        mean_d_ndvi: -0.38,
-        mean_d_ndwi: -0.04,
-        mean_d_ndbi: 0.42,
-        elongation: 1.34,
-        rationale: "Strong ΔNDBI increase with rectangular morphology and persistent multi-pass spectral shift.",
-      },
-      {
-        region_id: 2,
-        change_type: "road_development",
-        confidence: 0.87,
-        area_pixels: 165,
-        area_m2: 1650,
-        centroid: [lon + 0.003, lat + 0.001],
-        bbox: [lon + 0.001, lat, lon + 0.005, lat + 0.002],
-        mean_d_ndvi: -0.29,
-        mean_d_ndwi: -0.01,
-        mean_d_ndbi: 0.35,
-        elongation: 4.82,
-        rationale: "High elongation corridor paving connecting perimeter to highway.",
-      },
-    ],
-    reasons: [
-      "Confirmed in 3 consecutive satellite passes (no transient shadow/cloud false alarm)",
-      "High sub-pixel registration correlation (0.96 via ORB homography)",
-      "Spectral signature verified: ΔNDBI +0.42 / ΔNDVI -0.38",
-      "Suppressed viewing-angle and solar illumination mismatch",
-    ],
-    suppression_reasons: [
-      "Seasonal phenology difference normalized against baseline stack",
-      "Atmospheric haze difference eliminated by histogram matching",
-      "Viewing-angle off-nadir mismatch compensated by homography warp",
-    ],
-  };
-}
-
-function getDemoScenes() {
-  return [
-    {
-      scene_id: "S2_2026_0518_T43RER",
-      source_filename: "S2B_MSIL2A_20260518_T43RER.tif",
-      sensor: "Sentinel-2 MSI",
-      acquisition_date: "2026-05-18T05:42:11Z",
-      quality_score: 0.96,
-      cloud_fraction: 0.02,
-      status: "ingested",
-      processing_version: "2.2.0",
-      tile_count: 64,
-    },
-    {
-      scene_id: "S2_2026_0422_T43RER",
-      source_filename: "S2A_MSIL2A_20260422_T43RER.tif",
-      sensor: "Sentinel-2 MSI",
-      acquisition_date: "2026-04-22T05:41:09Z",
-      quality_score: 0.94,
-      cloud_fraction: 0.04,
-      status: "ingested",
-      processing_version: "2.2.0",
-      tile_count: 64,
-    },
-    {
-      scene_id: "LC08_2026_0315_146040",
-      source_filename: "LC08_L2SP_146040_20260315.tif",
-      sensor: "Landsat-8 OLI",
-      acquisition_date: "2026-03-15T05:12:00Z",
-      quality_score: 0.89,
-      cloud_fraction: 0.06,
-      status: "ingested",
-      processing_version: "2.2.0",
-      tile_count: 48,
-    },
-    {
-      scene_id: "S2_2024_0520_T43RER",
-      source_filename: "S2A_MSIL2A_20240520_T43RER.tif",
-      sensor: "Sentinel-2 MSI",
-      acquisition_date: "2024-05-20T05:38:20Z",
-      quality_score: 0.92,
-      cloud_fraction: 0.03,
-      status: "ingested",
-      processing_version: "2.2.0",
-      tile_count: 64,
-    },
-    {
-      scene_id: "S2_2023_0101_T43RER",
-      source_filename: "S2B_MSIL2A_20230101_T43RER.tif",
-      sensor: "Sentinel-2 MSI",
-      acquisition_date: "2023-01-01T05:40:00Z",
-      quality_score: 0.88,
-      cloud_fraction: 0.07,
-      status: "ingested",
-      processing_version: "2.2.0",
-      tile_count: 64,
-    },
-  ];
 }
 
 export interface EOProvider {
@@ -1700,16 +1474,8 @@ export async function searchEOProvider(
     if (!res.ok) throw new Error("Search failed");
     const data = await res.json();
     return data.results;
-  } catch {
-    if (provider === "isro-mosdac") {
-      return [
-        { item_id: "MOSDAC_INSAT3D_KOLKATA_2024", dataset_name: "INSAT-3D Multispectral Imager (ISRO)", acquisition_date: "2024-04-12T06:00:00Z", cloud_cover_percent: 3.2, bbox, spatial_resolution_m: 1000, bands: ["VIS", "SWIR", "TIR1"], metadata: { orbit: "Geostationary (82°E)" } },
-        { item_id: "MOSDAC_OCM3_BENGAL_2024", dataset_name: "Oceansat-3 Ocean Colour Monitor (ISRO)", acquisition_date: "2024-03-15T05:30:00Z", cloud_cover_percent: 1.8, bbox, spatial_resolution_m: 360, bands: ["B1", "B2", "B3", "B8"], metadata: { application: "Hooghly Estuary & Coastal Sediment Plume" } },
-      ];
-    }
-    return [
-      { item_id: "RS2_LISS3_KOLKATA_2024", dataset_name: "Resourcesat-2 LISS-III (23.5m)", acquisition_date: "2024-03-10T05:15:30Z", cloud_cover_percent: 1.4, bbox, spatial_resolution_m: 23.5, bands: ["Green", "Red", "NIR", "SWIR"], metadata: { location_name: "Kolkata (New Town & Rajarhat expansion)" } },
-    ];
+  } catch (error) {
+    throw error instanceof Error ? error : new Error("Provider search failed");
   }
 }
 
@@ -1753,6 +1519,7 @@ export interface IngestSceneItem {
 export interface IngestStats {
   vector_count: number;
   scenes_count: number;
+  quarantined_count?: number;
   scenes?: IngestSceneItem[];
   tiles_on_disk: number;
   incoming_count: number;
@@ -1762,23 +1529,7 @@ export interface IngestStats {
 }
 
 export async function fetchIngestStats(): Promise<IngestStats> {
-  try {
-    const res = await fetch(`${API_BASE}/api/ingest/stats`);
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch {
-    // fallback
-  }
-  return {
-    vector_count: 0,
-    scenes_count: 0,
-    scenes: [],
-    tiles_on_disk: 0,
-    incoming_count: 0,
-    incoming_files: [],
-    active_modalities: ["Sentinel-2 L2A (Optical VNIR/SWIR)", "Sentinel-1 GRD (SAR Radar)", "Landsat 8/9 C2L2", "ISRO Resourcesat"],
-    is_incremental: true,
-  };
+  const res = await fetch(`${API_BASE}/api/ingest/stats`);
+  if (!res.ok) throw new Error(`Ingestion telemetry failed: ${res.status}`);
+  return res.json();
 }
-

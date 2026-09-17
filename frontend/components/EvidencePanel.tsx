@@ -37,9 +37,9 @@ export default function EvidencePanel({
   const effDndwi = evidence?.d_ndwi ?? dNdwi;
   const effCorr = evidence?.registration_correlation ?? registrationCorr;
   const effCloud = evidence?.cloud_fraction ?? cloudFraction;
-  const effValid = evidence?.valid_pixel_ratio ?? validPixelRatio ?? 0.98;
+  const effValid = evidence?.valid_pixel_ratio ?? validPixelRatio;
 
-  const isHighCertainty = (confidence ?? 0.8) >= 0.75;
+  const isHighCertainty = confidence != null && confidence >= 0.75;
   const activeConfounds = confounds && confounds.length > 0
     ? confounds.filter((c) => c.severity === "high" || c.severity === "medium")
     : [];
@@ -70,7 +70,7 @@ export default function EvidencePanel({
             Explainable AI Verification
           </span>
           <span className="text-[10px] text-emerald-400 font-bold">
-            {evidence?.items ? `${evidence.items.filter(i => i.status === 'pass').length}/${evidence.items.length} Passed` : "Audited"}
+            {evidence?.items ? `${evidence.items.filter(i => i.status === 'pass').length}/${evidence.items.length} Passed` : "No checklist supplied"}
           </span>
         </div>
 
@@ -117,7 +117,7 @@ export default function EvidencePanel({
                   <span className="text-neutral-300">Sub-Pixel Co-Registration</span>
                 </span>
                 <span className="text-emerald-300 font-bold">
-                  {effCorr == null ? "98%" : `${Math.round(effCorr * 100)}% Corr`}
+                  {effCorr == null ? "N/A" : `${Math.round(effCorr * 100)}% Corr`}
                 </span>
               </div>
             </>
@@ -174,7 +174,7 @@ export default function EvidencePanel({
               <span>Optical Cloud Cover</span>
             </span>
             <span className="text-neutral-200 font-bold">
-              {effCloud == null ? "2.4%" : `${Math.round(effCloud * 100)}%`}
+              {effCloud == null ? "N/A" : `${Math.round(effCloud * 100)}%`}
             </span>
           </div>
 
@@ -184,7 +184,7 @@ export default function EvidencePanel({
               <span>Valid Pixel Ratio</span>
             </span>
             <span className="text-neutral-200 font-bold">
-              {effValid == null ? "99%" : `${Math.round(effValid * 100)}%`}
+              {effValid == null ? "N/A" : `${Math.round(effValid * 100)}%`}
             </span>
           </div>
         </div>

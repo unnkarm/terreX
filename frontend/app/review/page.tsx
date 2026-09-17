@@ -27,7 +27,7 @@ export default function ReviewQueuePage() {
     if (!selectedItem) return;
     setSubmitting(true);
     try {
-      await submitFeedback("change_result", selectedItem.targetId, verdict, analystNote.trim() || undefined);
+      await submitFeedback("change_result", selectedItem.targetId, verdict, analystNote.trim() || undefined, analystName);
 
       // Record in audit trail
       setAuditLog((prev) => [
