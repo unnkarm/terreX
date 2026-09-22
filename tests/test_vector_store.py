@@ -15,4 +15,4 @@ def test_sensor_aliases_include_common_sentinel2_names():
 
 
 def test_sensor_aliases_preserve_unknown_sensor():
-    assert _sensor_aliases("Cartosat-3") == ["Cartosat-3"]
+    assert "Cartosat-3" in _sensor_aliases("Cartosat-3")

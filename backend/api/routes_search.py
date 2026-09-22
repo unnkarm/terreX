@@ -12,12 +12,13 @@ from PIL import Image
 from config import settings
 from services.search import semantic_text_search, image_to_image_search
 from services.nlp_filter import parse_natural_language_query
+from services.ranking import detect_temporal_query_intent
 
 logger = logging.getLogger("terrex.api.search")
 router = APIRouter(prefix="/api/search", tags=["search"])
 
 
-def _operational_bbox(values) -> tuple[float, float, float, float]:
+def _operational_bbox(values) -> Optional[tuple[float, float, float, float]]:
     bounds = (
         settings.KOLKATA_AOI_MIN_LON,
         settings.KOLKATA_AOI_MIN_LAT,
@@ -28,17 +29,25 @@ def _operational_bbox(values) -> tuple[float, float, float, float]:
     if any(supplied) and not all(supplied):
         raise HTTPException(status_code=422, detail="All four AOI bounds must be supplied together")
     if not any(supplied):
-        return bounds
+        return None
     min_lon, min_lat, max_lon, max_lat = (float(value) for value in values)
-    if not (
-        bounds[0] <= min_lon < max_lon <= bounds[2]
-        and bounds[1] <= min_lat < max_lat <= bounds[3]
-    ):
+    if min_lon >= max_lon or min_lat >= max_lat:
+        raise HTTPException(status_code=422, detail="AOI minimum bounds must be below maximum bounds")
+
+    # Map-derived and scene-footprint AOIs may extend slightly beyond the
+    # operational boundary. Intersect them instead of rejecting the search.
+    clipped = (
+        max(min_lon, bounds[0]),
+        max(min_lat, bounds[1]),
+        min(max_lon, bounds[2]),
+        min(max_lat, bounds[3]),
+    )
+    if clipped[0] >= clipped[2] or clipped[1] >= clipped[3]:
         raise HTTPException(
             status_code=422,
-            detail=f"AOI must stay inside Greater Kolkata / West Bengal bounds {bounds}; max longitude is {bounds[2]:.2f}E",
+            detail=f"AOI does not intersect the Greater Kolkata / West Bengal operational bounds {bounds}",
         )
-    return min_lon, min_lat, max_lon, max_lat
+    return clipped
 
 
 def _validate_operational_polygon(polygon: Any) -> None:
@@ -57,7 +66,12 @@ def _validate_operational_polygon(polygon: Any) -> None:
     visit(coordinates)
     if not points:
         raise HTTPException(status_code=422, detail="AOI polygon contains no valid coordinates")
-    bounds = _operational_bbox((None, None, None, None))
+    bounds = (
+        settings.KOLKATA_AOI_MIN_LON,
+        settings.KOLKATA_AOI_MIN_LAT,
+        settings.KOLKATA_AOI_MAX_LON,
+        settings.KOLKATA_AOI_MAX_LAT,
+    )
     if any(not (bounds[0] <= lon <= bounds[2] and bounds[1] <= lat <= bounds[3]) for lon, lat in points):
         raise HTTPException(status_code=422, detail=f"AOI polygon must stay inside operational bounds {bounds}")
 
@@ -80,6 +94,7 @@ class TextSearchRequest(BaseModel):
 def parse_query_endpoint(q: str = Query(..., description="Query to parse into structured filters")):
     """Tier 1.2 NL filter parse endpoint."""
     parsed = parse_natural_language_query(q)
+    temporal_query, temporal_keywords = detect_temporal_query_intent(q)
     return {
         "raw_query": parsed.raw_query,
         "semantic_query": parsed.semantic_query,
@@ -94,6 +109,8 @@ def parse_query_endpoint(q: str = Query(..., description="Query to parse into st
         "max_cloud_cover": parsed.max_cloud_cover,
         "sensor": parsed.sensor,
         "explanation": parsed.explanation,
+        "temporal_change_intent": temporal_query,
+        "temporal_keywords": temporal_keywords,
     }
 
 

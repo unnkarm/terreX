@@ -23,6 +23,14 @@ GAZETTEER_POINTS: List[Dict[str, Any]] = [
         "keywords": ["esplanade", "dharmatala", "curzon park", "lenin sarani", "chowringhee north"],
     },
     {
+        "name": "Hooghly River / Ganges Waterway",
+        "zone": "River Corridor",
+        "lon": 88.3450,
+        "lat": 22.5800,
+        "feature_type": "waterway",
+        "keywords": ["hooghly", "hooghly river", "river", "ganga", "ganges", "ganges river", "riverfront", "waterway"],
+    },
+    {
         "name": "BBD Bagh / Dalhousie",
         "zone": "Central Kolkata",
         "lon": 88.3490,

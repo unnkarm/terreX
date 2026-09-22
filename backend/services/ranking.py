@@ -6,8 +6,24 @@ image quality + change confidence into one calibrated score.
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 import numpy as np
+
+from config import settings
+
+
+TEMPORAL_CHANGE_KEYWORDS = frozenset({
+    "new", "recent", "constructed", "construction", "cleared", "clearance",
+    "development", "developed", "expanded", "expansion", "built", "changed", "change",
+})
+
+
+def detect_temporal_query_intent(query: Optional[str]) -> tuple[bool, list[str]]:
+    """Detect explicit physical-change intent without substring false positives."""
+    tokens = set(re.findall(r"[a-z0-9]+", (query or "").lower()))
+    matches = sorted(tokens.intersection(TEMPORAL_CHANGE_KEYWORDS))
+    return bool(matches), matches
 
 
 def calibrate_similarity(raw_score: float, is_placeholder: bool = False) -> float:
@@ -30,6 +46,7 @@ def compute_final_score(
     metadata_match: float = 1.0,
     change_confidence: Optional[float] = None,
     is_placeholder: bool = False,
+    temporal_query: bool = False,
 ) -> tuple:
     """
     Calculates calibrated final ranking score.
@@ -44,16 +61,26 @@ def compute_final_score(
     else:
         relevance_gate = 1.0
 
-    w_sem = 0.65
-    w_qual = 0.15
-    w_meta = 0.10
-    w_geo = 0.10
+    change_value = float(np.clip(change_confidence or 0.0, 0.0, 1.0))
+    if temporal_query:
+        # Temporal queries keep semantic retrieval as the candidate generator,
+        # but physical delta becomes the primary reranking evidence.
+        weights = {"semantic": 0.45, "change": 0.35, "quality": 0.10, "geo": 0.10, "metadata": 0.0}
+    else:
+        weights = {
+            "semantic": float(settings.W_SEMANTIC),
+            "change": float(settings.W_CHANGE),
+            "quality": float(settings.W_QUALITY),
+            "geo": float(settings.W_GEO),
+            "metadata": float(settings.W_METADATA),
+        }
 
     base_score = (
-        w_sem * calibrated_sem
-        + w_qual * float(quality_score)
-        + w_meta * float(metadata_match)
-        + w_geo * float(geo_relevance)
+        weights["semantic"] * calibrated_sem
+        + weights["change"] * change_value
+        + weights["quality"] * float(quality_score)
+        + weights["geo"] * float(geo_relevance)
+        + weights["metadata"] * float(metadata_match)
     )
 
     # When a geographic target was extracted, apply spatial decay gating
@@ -67,7 +94,8 @@ def compute_final_score(
         "geo_relevance": round(geo_relevance, 4),
         "metadata_match": round(metadata_match, 4),
         "quality": round(quality_score, 4),
-        "change_confidence": round(change_confidence, 4) if change_confidence else 0.0,
+        "change_confidence": round(change_value, 4),
+        "ranking_mode": "change-aware" if temporal_query else "hybrid",
+        "weights": weights,
     }
     return round(final, 4), breakdown
-
