@@ -70,6 +70,16 @@ def test_registration_noise_graceful_fallback():
     assert res.is_aligned is False
 
 
+def test_registration_preserves_singleton_channel_axis():
+    rng = np.random.default_rng(7)
+    image = rng.uniform(0, 1, size=(64, 64, 1)).astype(np.float32)
+    shifted = np.roll(image, 2, axis=1)
+
+    result = register_image_pair(image, shifted)
+
+    assert result.aligned_after.shape == shifted.shape
+
+
 # ---------------------------------------------------------------------------
 # 2. Radiometric Normalization Tests
 # ---------------------------------------------------------------------------

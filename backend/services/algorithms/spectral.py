@@ -47,7 +47,9 @@ def compute_spectral_indices(
     """
     arr = raster.astype(np.float32)
     # Ensure (H, W, C)
-    if arr.ndim == 3 and arr.shape[0] <= 16 and arr.shape[0] < arr.shape[1] and arr.shape[0] < arr.shape[2]:
+    if arr.ndim == 2:
+        arr = arr[:, :, np.newaxis]
+    elif arr.ndim == 3 and arr.shape[0] <= 16 and arr.shape[0] < arr.shape[1] and arr.shape[0] < arr.shape[2]:
         arr = np.transpose(arr, (1, 2, 0))
 
     if arr.max() > 1.0:

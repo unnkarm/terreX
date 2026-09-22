@@ -37,9 +37,26 @@ from services.algorithms.spectral import compute_spectral_indices, compute_spect
 from services.algorithms.change_classifier import classify_change_regions, ChangeRegion
 
 
+def _portable_data_path(value: str) -> Path:
+    """Resolve persisted host/container paths against the active DATA_DIR."""
+    path = Path(value)
+    if path.exists():
+        return path
+    parts = str(value).replace("\\", "/").split("/")
+    if "data" in parts:
+        candidate = settings.DATA_DIR.joinpath(*parts[parts.index("data") + 1:])
+        if candidate.exists():
+            return candidate
+    return path
+
+
+def _portable_basename(value: Optional[str]) -> str:
+    return Path(str(value).replace("\\", "/")).name if value else ""
+
+
 def _load_tile_rgb_chw(tile: Tile) -> np.ndarray:
     """Load RGB thumbnail as float32 [0, 1] CHW array."""
-    img = Image.open(tile.tile_path).convert("RGB")
+    img = Image.open(_portable_data_path(tile.tile_path)).convert("RGB")
     arr = np.asarray(img, dtype=np.float32) / 255.0
     return np.transpose(arr, (2, 0, 1))  # (3, H, W)
 
@@ -50,7 +67,7 @@ def _load_tile_multispectral_or_rgb(tile: Tile) -> Tuple[np.ndarray, Optional[Di
     fall back to RGB thumbnail if .npz is not present.
     Returns (array (H, W, C) float32 [0, 1], band_map).
     """
-    thumb_path = Path(tile.tile_path)
+    thumb_path = _portable_data_path(tile.tile_path)
     npz_path = thumb_path.with_suffix(".npz")
     if npz_path.exists():
         try:
@@ -74,7 +91,7 @@ def _load_tile_multispectral_or_rgb(tile: Tile) -> Tuple[np.ndarray, Optional[Di
 def _load_precomputed_indices(tile: Tile) -> Optional[SpectralIndices]:
     """Load ingest-time spectral index maps when available."""
     try:
-        data = np.load(Path(tile.tile_path).with_suffix(".npz"), allow_pickle=True)
+        data = np.load(_portable_data_path(tile.tile_path).with_suffix(".npz"), allow_pickle=True)
         if all(key in data for key in ("ndvi", "ndwi", "ndbi")):
             band_map = data["band_map"].item() if "band_map" in data else {}
             return SpectralIndices(data["ndvi"], data["ndwi"], data["ndbi"], "nir" in band_map, band_map)
@@ -103,7 +120,7 @@ def _prepare_prithvi_input(raster: np.ndarray, band_map: Optional[Dict[str, int]
 def _tile_has_prithvi_bands(tile: Tile) -> bool:
     """Return whether the tile pack can feed the six-band Prithvi path."""
     try:
-        data = np.load(Path(tile.tile_path).with_suffix(".npz"), allow_pickle=True)
+        data = np.load(_portable_data_path(tile.tile_path).with_suffix(".npz"), allow_pickle=True)
         if "bands" not in data or "band_map" not in data:
             return False
         band_map = data["band_map"].item()
@@ -116,56 +133,49 @@ def _difference_to_change_map(before_feat: np.ndarray, after_feat: np.ndarray) -
     """
     Swappable change detection head.
     Computes per-patch L2 feature distance, min-max normalized to 0..1.
-    Gracefully handles dimension and channel mismatches between feature maps.
     """
     bf = np.asarray(before_feat, dtype=np.float32)
     af = np.asarray(after_feat, dtype=np.float32)
+    if bf.shape != af.shape:
+        raise ValueError(f"feature shapes do not match: {bf.shape} vs {af.shape}")
 
-    # 1. Ensure at least 3D [H, W, C]
-    if bf.ndim == 2:
-        bf = bf[:, :, None]
-    if af.ndim == 2:
-        af = af[:, :, None]
-
-    # 2. Align spatial grid dimensions [H, W]
-    if bf.shape[:2] != af.shape[:2]:
-        target_h = max(bf.shape[0], af.shape[0])
-        target_w = max(bf.shape[1], af.shape[1])
-        if bf.shape[:2] != (target_h, target_w):
-            bf_resized = []
-            for c in range(bf.shape[-1]):
-                img = Image.fromarray(bf[..., c]).resize((target_w, target_h), Image.Resampling.BILINEAR)
-                bf_resized.append(np.asarray(img, dtype=np.float32))
-            bf = np.stack(bf_resized, axis=-1)
-        if af.shape[:2] != (target_h, target_w):
-            af_resized = []
-            for c in range(af.shape[-1]):
-                img = Image.fromarray(af[..., c]).resize((target_w, target_h), Image.Resampling.BILINEAR)
-                af_resized.append(np.asarray(img, dtype=np.float32))
-            af = np.stack(af_resized, axis=-1)
-
-    # 3. Align channel dimensions
-    if bf.shape[-1] != af.shape[-1]:
-        bf_norm = bf / (np.linalg.norm(bf, axis=-1, keepdims=True) + 1e-8)
-        af_norm = af / (np.linalg.norm(af, axis=-1, keepdims=True) + 1e-8)
-        diff = np.abs(bf_norm.mean(axis=-1) - af_norm.mean(axis=-1))
-    else:
-        diff = np.linalg.norm(bf - af, axis=-1)
-
-    # Normalize by the local feature magnitude rather than stretching every
-    # pair to 0..1.  Pair-wise min/max scaling makes harmless noise look like a
-    # full-strength change and prevents a stable threshold across a time series.
+    diff = np.linalg.norm(bf - af, axis=-1)
     magnitude = np.linalg.norm(bf, axis=-1) + np.linalg.norm(af, axis=-1) + 1e-6
-    if bf.shape[-1] != af.shape[-1]:
-        magnitude = np.abs(bf_norm.mean(axis=-1)) + np.abs(af_norm.mean(axis=-1)) + 1e-6
     return np.clip(diff / magnitude, 0.0, 1.0).astype(np.float32)
+
+
+def _to_chw(raster: np.ndarray) -> np.ndarray:
+    """Safely convert any 2D or 3D raster into a float32 (3, H, W) CHW array."""
+    arr = np.asarray(raster, dtype=np.float32)
+    if arr.ndim == 2:
+        return np.repeat(arr[np.newaxis, :, :], 3, axis=0)
+    elif arr.ndim == 3:
+        if arr.shape[0] <= 6 and arr.shape[1] > 16 and arr.shape[2] > 16:
+            if arr.shape[0] == 1:
+                return np.repeat(arr, 3, axis=0)
+            elif arr.shape[0] >= 3:
+                return arr[:3]
+            else:
+                pad = np.zeros((1, arr.shape[1], arr.shape[2]), dtype=arr.dtype)
+                return np.concatenate([arr, pad], axis=0)
+        else:
+            c = arr.shape[-1]
+            if c == 1:
+                hwc3 = np.repeat(arr, 3, axis=-1)
+            elif c >= 3:
+                hwc3 = arr[..., :3]
+            else:
+                pad = np.zeros((arr.shape[0], arr.shape[1], 1), dtype=arr.dtype)
+                hwc3 = np.concatenate([arr, pad], axis=-1)
+            return np.transpose(hwc3, (2, 0, 1))
+    return np.zeros((3, 256, 256), dtype=np.float32)
 
 
 def _extract_prithvi_features(raster: np.ndarray, band_map: Optional[Dict[str, int]]):
     """Use Prithvi's six-band order when possible, otherwise RGB placeholder features."""
     chw = _prepare_prithvi_input(raster, band_map)
     if chw is None:
-        chw = np.transpose(raster[..., :min(3, raster.shape[-1])], (2, 0, 1))
+        chw = _to_chw(raster)
     return prithvi_service.extract(chw), chw
 
 
@@ -175,12 +185,13 @@ def _extract_pair_features(
     after_raster: np.ndarray,
     after_bmap: Optional[Dict[str, int]],
 ):
-    before_chw = _prepare_prithvi_input(before_raster, before_bmap)
-    after_chw = _prepare_prithvi_input(after_raster, after_bmap)
-    if before_chw is None:
-        before_chw = np.transpose(before_raster[..., :min(3, before_raster.shape[-1])], (2, 0, 1))
-    if after_chw is None:
-        after_chw = np.transpose(after_raster[..., :min(3, after_raster.shape[-1])], (2, 0, 1))
+    before_prithvi = _prepare_prithvi_input(before_raster, before_bmap)
+    after_prithvi = _prepare_prithvi_input(after_raster, after_bmap)
+    if before_prithvi is not None and after_prithvi is not None:
+        before_chw, after_chw = before_prithvi, after_prithvi
+    else:
+        before_chw = _to_chw(before_raster)
+        after_chw = _to_chw(after_raster)
     return prithvi_service.extract(before_chw), before_chw, prithvi_service.extract(after_chw), after_chw
 
 
@@ -283,9 +294,86 @@ def find_candidate_tiles(
             if len(cell_cands) >= 2:
                 candidates = cell_cands
 
+        # Deduplicate to at most 1 best observation per day per sensor modality
+        by_day_sensor: dict[tuple[str, str], dict] = {}
+        for c in candidates:
+            day_str = c["acquisition_date"].date().isoformat()
+            modality = "sar" if "sar" in (c.get("sensor") or "").lower() else "optical"
+            key = (day_str, modality)
+            prev = by_day_sensor.get(key)
+            if prev is None or c["quality_score"] > prev["quality_score"]:
+                by_day_sensor[key] = c
+        candidates = sorted(by_day_sensor.values(), key=lambda c: c["acquisition_date"])
+
+        # Cap stack size to max 12 most relevant observations to ensure fast and responsive processing
+        if len(candidates) > 12:
+            candidates = candidates[:4] + candidates[-8:]
+
         # Sort chronologically
         candidates.sort(key=lambda c: c["acquisition_date"])
         return candidates
+
+
+def list_available_acquisitions(
+    lon: float,
+    lat: float,
+    *,
+    reference_tile_id: Optional[str] = None,
+    tolerance_deg: float = 0.08,
+) -> List[Dict[str, Any]]:
+    """Return one nearest tile per real acquisition for the selected AOI."""
+    with get_session() as session:
+        ref_tile = session.get(Tile, reference_tile_id) if reference_tile_id else None
+        if ref_tile is not None:
+            lon, lat = ref_tile.lon, ref_tile.lat
+
+        rows = session.execute(
+            select(Tile).where(
+                and_(
+                    Tile.lon.between(lon - tolerance_deg, lon + tolerance_deg),
+                    Tile.lat.between(lat - tolerance_deg, lat + tolerance_deg),
+                    Tile.acquisition_date.is_not(None),
+                )
+            )
+        ).scalars().all()
+
+        nearest: Dict[tuple[str, str], tuple[float, Tile]] = {}
+        for tile in rows:
+            day = tile.acquisition_date.date().isoformat()
+            sensor = tile.sensor or "Unknown"
+            distance = ((tile.lon - lon) ** 2 + (tile.lat - lat) ** 2) ** 0.5
+            key = (day, sensor)
+            if key not in nearest or distance < nearest[key][0]:
+                nearest[key] = (distance, tile)
+
+        acquisitions = []
+        for _, tile in sorted(nearest.values(), key=lambda item: item[1].acquisition_date):
+            thumb_name = _portable_basename(tile.thumbnail_path) or None
+            spectral = tile.spectral_indices or {}
+            acquisitions.append({
+                "index": len(acquisitions) + 1,
+                "tile_id": str(tile.tile_id),
+                "scene_id": str(tile.scene_id),
+                "acquisition_date": tile.acquisition_date.isoformat(),
+                "date_formatted": tile.acquisition_date.date().isoformat(),
+                "year": str(tile.acquisition_date.year),
+                "sensor": tile.sensor or "Unknown",
+                "modality": "sar" if any(token in (tile.sensor or "").lower() for token in ("sar", "radar", "c-sar")) else "optical",
+                "lon": tile.lon,
+                "lat": tile.lat,
+                "resolution_m": tile.resolution_m,
+                "tile_size": tile.tile_size,
+                "cloud_fraction": float(tile.cloud_fraction or 0.0),
+                "quality_score": float(tile.quality_score or 0.0),
+                "thumbnail_url": f"/static/tiles/{tile.scene_id}/{thumb_name}" if thumb_name else None,
+                "mean_ndvi": spectral.get("ndvi_mean"),
+                "mean_ndwi": spectral.get("ndwi_mean"),
+                "mean_ndbi": spectral.get("ndbi_mean"),
+                "distance_from_baseline": 0.0,
+                "is_baseline": False,
+                "is_earliest_change": False,
+            })
+        return acquisitions
 
 
 def run_change_detection(
@@ -294,7 +382,12 @@ def run_change_detection(
     date_from: str,
     date_to: str,
     tile_id: Optional[str] = None,
+    *,
+    change_prob_threshold: Optional[float] = None,
+    change_map_threshold: Optional[float] = None,
 ) -> dict:
+    prob_threshold = settings.CHANGE_PROB_THRESHOLD if change_prob_threshold is None else change_prob_threshold
+    map_threshold = settings.CHANGE_MAP_THRESHOLD if change_map_threshold is None else change_map_threshold
     candidates = find_candidate_tiles(lon, lat, date_from, date_to, tolerance_deg=0.08, reference_tile_id=tile_id)
     if len(candidates) < 2:
         candidates = find_candidate_tiles(lon, lat, date_from, date_to, tolerance_deg=0.15, reference_tile_id=tile_id)
@@ -370,11 +463,15 @@ def run_change_detection(
             prob_map_full = np.asarray(
                 Image.fromarray(change_prob_map.astype(np.float32)).resize((w_orig, h_orig), Image.Resampling.BILINEAR)
             )
-        change_mask_binary = (prob_map_full > settings.CHANGE_PROB_THRESHOLD).astype(np.uint8)
+        change_mask_binary = (prob_map_full > map_threshold).astype(np.uint8)
 
         # 5. Quality Diagnostics
         before_rgb = before_raster[..., :3]
         after_rgb = norm_after_raster[..., :3]
+        if before_rgb.ndim != 3 or after_rgb.ndim != 3:
+            raise ValueError(
+                f"Invalid RGB diagnostic shapes: before={before_rgb.shape}, after={after_rgb.shape}"
+            )
 
         before_q = ObservationQuality(
             cloud_fraction=cloud_fraction_estimate(before_rgb),
@@ -409,10 +506,10 @@ def run_change_detection(
                 if c_feat.array.shape == before_feat_map.array.shape:
                     d_base = float(_difference_to_change_map(before_feat_map.array, c_feat.array).mean())
                     temporal_scores.append(d_base)
-                    if d_base > settings.CHANGE_PROB_THRESHOLD and c_tile.acquisition_date < earliest_change_date:
+                    if d_base > prob_threshold and c_tile.acquisition_date < earliest_change_date:
                         earliest_change_date = c_tile.acquisition_date
 
-            thumb_name = Path(c_tile.thumbnail_path).name if c_tile.thumbnail_path else "thumb.jpg"
+            thumb_name = _portable_basename(c_tile.thumbnail_path) or "thumb.jpg"
             observation_stack.append({
                 "index": idx + 1,
                 "tile_id": c_tile.tile_id,
@@ -445,6 +542,7 @@ def run_change_detection(
             registration_correlation=reg_result.correlation_after,
             radiometric_diff=radiometric_diff,
             temporal_series=temporal_scores if temporal_scores else None,
+            change_threshold=prob_threshold,
         )
 
         # 8. Layer-2 Change Typing (Construction, Clearance, Water, Road)
@@ -499,7 +597,7 @@ def run_change_detection(
             "d_ndvi": d_ndvi_val,
             "d_ndwi": d_ndwi_val,
             "d_ndbi": d_ndbi_val,
-            "persistence_count": len([s for s in temporal_scores if s > settings.CHANGE_PROB_THRESHOLD]),
+            "persistence_count": len([s for s in temporal_scores if s > prob_threshold]),
             "total_observations": len(candidates),
             "valid_pixel_ratio": min_valid_pixel,
             "registration_correlation": round(reg_result.correlation_after, 3),
@@ -528,7 +626,7 @@ def run_change_detection(
                 {
                     "label": "Multi-Pass Persistence",
                     "status": "pass" if len(temporal_scores) >= 2 else "info",
-                    "value": f"{len([s for s in temporal_scores if s > settings.CHANGE_PROB_THRESHOLD])}/{len(temporal_scores)} passes" if temporal_scores else "2/2 passes",
+                    "value": f"{len([s for s in temporal_scores if s > prob_threshold])}/{len(temporal_scores)} passes" if temporal_scores else "2/2 passes",
                     "details": "Corroborated across continuous time series observations",
                 },
                 {
@@ -621,7 +719,7 @@ def run_change_detection(
                 "tile_id": before_tile.tile_id,
                 "acquisition_date": before_tile.acquisition_date.isoformat(),
                 "thumbnail_path": before_tile.thumbnail_path,
-                "thumbnail_url": f"/static/tiles/{before_tile.scene_id}/{Path(before_tile.thumbnail_path).name}",
+                "thumbnail_url": f"/static/tiles/{before_tile.scene_id}/{_portable_basename(before_tile.thumbnail_path)}",
                 "sensor": before_tile.sensor,
                 "quality": before_q.__dict__,
             },
@@ -629,7 +727,7 @@ def run_change_detection(
                 "tile_id": after_tile.tile_id,
                 "acquisition_date": after_tile.acquisition_date.isoformat(),
                 "thumbnail_path": after_tile.thumbnail_path,
-                "thumbnail_url": f"/static/tiles/{after_tile.scene_id}/{Path(after_tile.thumbnail_path).name}",
+                "thumbnail_url": f"/static/tiles/{after_tile.scene_id}/{_portable_basename(after_tile.thumbnail_path)}",
                 "sensor": after_tile.sensor,
                 "quality": after_q.__dict__,
             },

@@ -5,6 +5,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 
 from services.dense_change_detection import run_dense_change_detection
+from services.change_detection import list_available_acquisitions
 
 router = APIRouter(prefix="/api/change", tags=["change-detection"])
 
@@ -21,6 +22,23 @@ class ChangeDetectRequest(BaseModel):
     baseline_n: int = 3
     persistence_k: int = 2
     threshold: Optional[float] = None
+    change_prob_threshold: Optional[float] = None
+    change_map_threshold: Optional[float] = None
+
+
+@router.get("/acquisitions")
+def available_acquisitions(
+    lon: float = Query(...),
+    lat: float = Query(...),
+    tile_id: Optional[str] = Query(None),
+):
+    """List actual AOI acquisition timestamps for date controls and scrubbing."""
+    observations = list_available_acquisitions(lon, lat, reference_tile_id=tile_id)
+    return {
+        "count": len(observations),
+        "available_dates": [item["date_formatted"] for item in observations],
+        "observations": observations,
+    }
 
 
 @router.get("/detect")
@@ -33,6 +51,8 @@ def detect_change_get(
     baseline_n: int = Query(3, ge=1, le=10),
     persistence_k: int = Query(2, ge=2, le=5),
     threshold: Optional[float] = Query(None, gt=0.0, le=1.0),
+    change_prob_threshold: Optional[float] = Query(None, gt=0.0, le=1.0),
+    change_map_threshold: Optional[float] = Query(None, gt=0.0, le=1.0),
 ):
     """
     Run dense multi-temporal change-point detection for an AOI and date range.
@@ -43,6 +63,8 @@ def detect_change_get(
         return run_dense_change_detection(
             lon=lon, lat=lat, date_from=date_from, date_to=date_to, tile_id=tile_id,
             baseline_n=baseline_n, persistence_k=persistence_k, threshold=threshold,
+            change_prob_threshold=change_prob_threshold,
+            change_map_threshold=change_map_threshold,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -88,6 +110,8 @@ def detect_change_post(payload: ChangeDetectRequest = Body(...)):
             baseline_n=payload.baseline_n,
             persistence_k=payload.persistence_k,
             threshold=payload.threshold,
+            change_prob_threshold=payload.change_prob_threshold,
+            change_map_threshold=payload.change_map_threshold,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))

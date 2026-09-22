@@ -26,7 +26,10 @@ from services.change_detection import (
     _extract_pair_features,
     _load_precomputed_indices,
     _load_tile_multispectral_or_rgb,
+    _portable_basename,
     find_candidate_tiles,
+    list_available_acquisitions,
+    run_change_detection,
 )
 from services.false_alarm import ObservationQuality, evaluate
 from services.quality import cloud_fraction_estimate, sharpness_score, valid_pixel_fraction
@@ -83,6 +86,8 @@ def _median_baseline(entries: list[dict[str, Any]]) -> tuple[np.ndarray, dict[st
 
 
 def _quality(tile: Tile, raster: np.ndarray) -> ObservationQuality:
+    if raster.ndim != 3:
+        raise ValueError(f"Unsupported raster shape for {tile.tile_id}: {raster.shape}")
     rgb = raster[..., : min(3, raster.shape[-1])]
     if rgb.shape[-1] == 1:
         rgb = np.repeat(rgb, 3, axis=-1)
@@ -97,7 +102,7 @@ def _quality(tile: Tile, raster: np.ndarray) -> ObservationQuality:
 def _observation_payload(entry: dict[str, Any], index: int) -> dict[str, Any]:
     tile: Tile = entry["tile"]
     indices = entry["indices"]
-    thumb_name = Path(tile.thumbnail_path).name if tile.thumbnail_path else ""
+    thumb_name = _portable_basename(tile.thumbnail_path)
     return {
         "index": index + 1,
         "tile_id": str(tile.tile_id),
@@ -139,27 +144,49 @@ def run_dense_change_detection(
     baseline_n: Optional[int] = None,
     persistence_k: Optional[int] = None,
     threshold: Optional[float] = None,
+    change_prob_threshold: Optional[float] = None,
+    change_map_threshold: Optional[float] = None,
 ) -> dict[str, Any]:
     _assert_operational_aoi(lon, lat)
     baseline_n = settings.CHANGE_BASELINE_OBSERVATIONS if baseline_n is None else baseline_n
     persistence_k = settings.CHANGE_PERSISTENCE_K if persistence_k is None else persistence_k
     threshold = threshold if threshold is not None else settings.CHANGE_POINT_THRESHOLD
+    change_prob_threshold = change_prob_threshold if change_prob_threshold is not None else settings.CHANGE_PROB_THRESHOLD
+    change_map_threshold = change_map_threshold if change_map_threshold is not None else settings.CHANGE_MAP_THRESHOLD
 
     candidates = find_candidate_tiles(
         lon, lat, date_from, date_to, tolerance_deg=0.08, reference_tile_id=tile_id
     )
     if len(candidates) < baseline_n + persistence_k:
+        if len(candidates) >= 2:
+            result = run_change_detection(
+                lon, lat, date_from, date_to, tile_id,
+                change_prob_threshold=change_prob_threshold, change_map_threshold=change_map_threshold,
+            )
+            result.update({
+                "is_fallback": True,
+                "analysis_mode": "bi-temporal",
+                "fallback_reason": (
+                    f"{len(candidates)} usable observations are available; "
+                    "running T0 vs T1 differencing instead of dense persistence analysis."
+                ),
+                "available_dates": [item["acquisition_date"].date().isoformat() for item in candidates],
+            })
+            return result
+        available = list_available_acquisitions(lon, lat, reference_tile_id=tile_id)
+        dates = [item["date_formatted"] for item in available]
         return {
             "status": "insufficient_data",
             "is_fallback": False,
+            "analysis_mode": "nearest-available",
             "result_source": "backend",
-            "message": (
-                f"Found {len(candidates)} usable observations; dense change-point analysis "
-                f"requires at least {baseline_n + persistence_k} ({baseline_n} baseline + "
-                f"{persistence_k} persistence passes)."
-            ),
+            "message": "High-cadence (5–7 day) data is not available for this exact date window. "
+                       f"Available imagery dates for this region are: {', '.join(dates) if dates else 'none'}. "
+                       "Showing nearest available acquisitions.",
             "candidate_count": len(candidates),
             "required_observations": baseline_n + persistence_k,
+            "available_dates": dates,
+            "observations": available,
         }
 
     with get_session() as session:
@@ -191,6 +218,21 @@ def run_dense_change_detection(
         entries.sort(key=lambda item: item["tile"].acquisition_date)
         valid_indices = [index for index, item in enumerate(entries) if item["valid"]]
         if len(valid_indices) < baseline_n + persistence_k:
+            if len(candidates) >= 2:
+                result = run_change_detection(
+                    lon, lat, date_from, date_to, tile_id,
+                    change_prob_threshold=change_prob_threshold, change_map_threshold=change_map_threshold,
+                )
+                result.update({
+                    "is_fallback": True,
+                    "analysis_mode": "bi-temporal",
+                    "fallback_reason": (
+                        f"Only {len(valid_indices)} observations passed dense quality gating; "
+                        "running T0 vs T1 differencing."
+                    ),
+                    "available_dates": [item["acquisition_date"].date().isoformat() for item in candidates],
+                })
+                return result
             return {
                 "status": "insufficient_data",
                 "is_fallback": False,
@@ -254,9 +296,9 @@ def run_dense_change_detection(
                 )
                 pixel_score = min(1.0, float(np.median(np.abs(normalized - baseline_raster))) / dynamic_range)
 
-                base_indices = compute_spectral_indices(baseline_raster, baseline_map)
-                current_indices = compute_spectral_indices(normalized, current_map)
                 if entry["modality"] == "optical":
+                    base_indices = compute_spectral_indices(baseline_raster, baseline_map)
+                    current_indices = compute_spectral_indices(normalized, current_map)
                     entry["d_ndvi"] = float(current_indices.ndvi.mean() - base_indices.ndvi.mean())
                     entry["d_ndwi"] = float(current_indices.ndwi.mean() - base_indices.ndwi.mean())
                     entry["d_ndbi"] = float(current_indices.ndbi.mean() - base_indices.ndbi.mean())
@@ -351,11 +393,41 @@ def run_dense_change_detection(
                 "no_change": "No valid observation crossed the change threshold.",
                 "insufficient_data": "The usable stack could not establish the requested baseline.",
             }
+            key_material = "|".join([
+                f"{lon:.6f}", f"{lat:.6f}", date_from, date_to,
+                str(baseline_n), str(persistence_k), f"{threshold:.4f}",
+                *(str(item["tile"].tile_id) for item in entries),
+            ])
+            analysis_key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()
+            result = session.execute(
+                select(ChangeResult).where(ChangeResult.analysis_key == analysis_key)
+            ).scalar_one_or_none()
+            if result is None:
+                first_valid = entries[valid_indices[0]]
+                last_valid = entries[valid_indices[-1]]
+                result = ChangeResult(
+                    before_tile_id=first_valid["tile"].tile_id,
+                    after_tile_id=last_valid["tile"].tile_id,
+                    change_score=0.0,
+                    quality_score=float(np.mean([entries[index]["quality"].quality_score for index in valid_indices])),
+                    confidence=1.0,
+                    method="dense-multitemporal-change-point",
+                    is_placeholder_model=False,
+                    analysis_key=analysis_key,
+                )
+                session.add(result)
+            result.change_score = 0.0
+            result.persistence_status = change_point.status
+            result.persistence_log = change_point.log
+            result.observations = observations
+            result.evidence = {"persistence_verification": persistence}
+            session.flush()
             return {
                 "status": change_point.status,
                 "is_fallback": False,
                 "result_source": "backend",
                 "message": labels.get(change_point.status, "No confirmed change."),
+                "change_id": str(result.change_id),
                 "observations": observations,
                 "persistence": persistence,
                 "candidate_count": len(entries),
@@ -377,7 +449,7 @@ def run_dense_change_detection(
             Image.fromarray(probability.astype(np.float32)).resize((width, height), Image.Resampling.BILINEAR),
             dtype=np.float32,
         )
-        change_mask = (probability_full >= settings.CHANGE_MAP_THRESHOLD).astype(np.uint8)
+        change_mask = (probability_full >= change_map_threshold).astype(np.uint8)
         before_indices = compute_spectral_indices(analysis["baseline"], analysis["baseline_map"])
         after_indices = compute_spectral_indices(analysis["normalized"], analysis["current_map"])
         regions = classify_change_regions(change_mask, before_indices, after_indices, min_region_size=8)
@@ -397,6 +469,7 @@ def run_dense_change_detection(
             registration_correlation=float(analysis["registration"]["correlation_after"]),
             radiometric_diff=float(onset_entry["radiometric_normalization"]["mean_delta_after"]),
             temporal_series=temporal_scores,
+            change_threshold=threshold,
         )
 
         pixel_res = float(after_tile.resolution_m or before_tile.resolution_m or 10.0)
@@ -560,14 +633,14 @@ def run_dense_change_detection(
                 "tile_id": str(before_tile.tile_id),
                 "acquisition_date": before_tile.acquisition_date.isoformat(),
                 "thumbnail_path": before_tile.thumbnail_path,
-                "thumbnail_url": f"/static/tiles/{before_tile.scene_id}/{Path(before_tile.thumbnail_path).name}",
+                "thumbnail_url": f"/static/tiles/{before_tile.scene_id}/{_portable_basename(before_tile.thumbnail_path)}",
                 "sensor": before_tile.sensor,
             },
             "after": {
                 "tile_id": str(after_tile.tile_id),
                 "acquisition_date": after_tile.acquisition_date.isoformat(),
                 "thumbnail_path": after_tile.thumbnail_path,
-                "thumbnail_url": f"/static/tiles/{after_tile.scene_id}/{Path(after_tile.thumbnail_path).name}",
+                "thumbnail_url": f"/static/tiles/{after_tile.scene_id}/{_portable_basename(after_tile.thumbnail_path)}",
                 "sensor": after_tile.sensor,
             },
             "confirmation": {

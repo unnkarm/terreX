@@ -26,6 +26,13 @@ class RegistrationResult:
     dy: float = 0.0
 
 
+def _restore_channel_axis(aligned: np.ndarray, original: np.ndarray) -> np.ndarray:
+    """OpenCV drops the singleton channel axis when warping HxWx1 rasters."""
+    if original.ndim == 3 and original.shape[-1] == 1 and aligned.ndim == 2:
+        return aligned[..., np.newaxis]
+    return aligned
+
+
 def _to_gray_uint8(img: np.ndarray) -> np.ndarray:
     """Convert float [0, 1] or uint8 [0, 255] (H, W) or (H, W, C) to uint8 (H, W)."""
     if img.ndim == 3:
@@ -77,6 +84,7 @@ def _phase_registration(
             after_img, matrix, (w, h), flags=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_REFLECT_101,
         )
+        aligned = _restore_channel_axis(aligned, after_img)
         correlation = compute_correlation(gray_ref, _to_gray_uint8(aligned))
         candidates.append((correlation, aligned, matrix, float(dx), float(dy)))
     corr_after, aligned_after, matrix, dx, dy = max(candidates, key=lambda item: item[0])
@@ -219,6 +227,7 @@ def register_image_pair(
         flags=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_REFLECT_101,
     )
+    aligned_after = _restore_channel_axis(aligned_after, after_img)
 
     gray_aligned = _to_gray_uint8(aligned_after)
     corr_after = compute_correlation(gray_ref, gray_aligned)

@@ -53,6 +53,7 @@ def evaluate(
     registration_correlation: float,
     radiometric_diff: float,
     temporal_series: Optional[List[float]] = None,  # raw change scores at other dates, if any
+    change_threshold: Optional[float] = None,
 ) -> SuppressionResult:
     reasons: List[str] = []
     confounds: List[ConfoundFactor] = []
@@ -133,7 +134,8 @@ def evaluate(
 
     # 5. Temporal consistency / corroboration
     if temporal_series and len(temporal_series) >= 2:
-        persistent = sum(1 for v in temporal_series if v > settings.CHANGE_PROB_THRESHOLD)
+        effective_threshold = settings.CHANGE_PROB_THRESHOLD if change_threshold is None else change_threshold
+        persistent = sum(1 for v in temporal_series if v > effective_threshold)
         if persistent >= max(2, len(temporal_series) - 1):
             boost = min(0.25, 0.06 * persistent)
             score = min(1.0, score + boost)
