@@ -356,12 +356,25 @@ def _compute_tile_bounds_wgs84(
     return float(min_lon), float(min_lat), float(max_lon), float(max_lat), float(center_lon), float(center_lat)
 
 
-def ingest_file(path: Path, move_to_scenes: bool = True, progress: Optional[Callable[[str, int, int], None]] = None) -> dict:
+def ingest_file(
+    path: Path,
+    move_to_scenes: bool = True,
+    progress: Optional[Callable[[str, int, int], None]] = None,
+    aoi_bounds: Optional[Tuple[float, float, float, float]] = None,
+    use_aoi_filter: Optional[bool] = None,
+) -> dict:
     """
     Ingest a single GeoTIFF/COG file end-to-end with streaming windowed reads.
     Returns a summary dict. Quarantines invalid scenes for full auditability.
     """
-    logger.info("Ingesting %s", path)
+    if aoi_bounds is None and (use_aoi_filter or (use_aoi_filter is None and settings.INGEST_AOI_FILTER_ENABLED)):
+        aoi_bounds = (
+            settings.INGEST_AOI_MIN_LON,
+            settings.INGEST_AOI_MIN_LAT,
+            settings.INGEST_AOI_MAX_LON,
+            settings.INGEST_AOI_MAX_LAT,
+        )
+    logger.info("Ingesting %s (AOI filter: %s)", path, f"enabled {aoi_bounds}" if aoi_bounds else "disabled")
     started = time.perf_counter()
     source_hash = _file_sha256(path)
     with get_session() as existing_session:
@@ -487,6 +500,7 @@ def ingest_file(path: Path, move_to_scenes: bool = True, progress: Optional[Call
                 session=session,
                 band_map=band_map,
                 progress=progress,
+                aoi_bounds=aoi_bounds,
             )
 
             # Update scene-level aggregated quality
@@ -530,6 +544,7 @@ def _tile_and_index_windowed(
     session,
     band_map: Dict[str, int],
     progress: Optional[Callable[[str, int, int], None]] = None,
+    aoi_bounds: Optional[Tuple[float, float, float, float]] = None,
 ) -> dict:
     ts = settings.TILE_SIZE
     overlap = settings.TILE_OVERLAP
@@ -556,6 +571,26 @@ def _tile_and_index_windowed(
             if tile_h < ts // 2 or tile_w < ts // 2:
                 continue
             completed += 1
+
+            min_lon, min_lat, max_lon, max_lat, center_lon, center_lat = _compute_tile_bounds_wgs84(
+                dataset, col, row, tile_w, tile_h
+            )
+
+            # Fast early spatial AOI check: skip any tile outside the target AOI
+            if aoi_bounds is not None:
+                aoi_min_lon, aoi_min_lat, aoi_max_lon, aoi_max_lat = aoi_bounds
+                if (
+                    max_lon < aoi_min_lon
+                    or min_lon > aoi_max_lon
+                    or max_lat < aoi_min_lat
+                    or min_lat > aoi_max_lat
+                ):
+                    skipped += 1
+                    if progress:
+                        progress("tiling", completed, planned)
+                    continue
+
+            tile_poly = box(min_lon, min_lat, max_lon, max_lat)
 
             window = Window(col_off=col, row_off=row, width=tile_w, height=tile_h)
             deterministic_id = _deterministic_tile_id(str(scene.source_hash or scene.scene_id), row, col, scene.acquisition_date)
@@ -603,11 +638,6 @@ def _tile_and_index_windowed(
                 ndwi=indices.ndwi.astype(np.float32),
                 ndbi=indices.ndbi.astype(np.float32),
             )
-
-            min_lon, min_lat, max_lon, max_lat, center_lon, center_lat = _compute_tile_bounds_wgs84(
-                dataset, col, row, tile_w, tile_h
-            )
-            tile_poly = box(min_lon, min_lat, max_lon, max_lat)
 
             emb = embedding_service.embed_image(img)
 

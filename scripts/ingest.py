@@ -76,15 +76,21 @@ def reset_storage_and_indexes():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ingest satellite imagery into TerreX.")
+    parser = argparse.ArgumentParser(description="Ingest satellite imagery into TerreX with fast AOI spatial filtering.")
     parser.add_argument("--file", type=str, default=None, help="Ingest a single specific file")
-    parser.add_argument("--clean", "--reset", action="store_true", help="Wipe Qdrant & database before ingesting")
+    parser.add_argument("--clean", "--reset", action="store_true", help="Wipe Qdrant & database before ingesting (WARNING: Destructive)")
+    parser.add_argument("--aoi", nargs=4, type=float, metavar=("MIN_LON", "MIN_LAT", "MAX_LON", "MAX_LAT"), default=None, help="Custom AOI bounding box for tile filtering")
+    parser.add_argument("--full-swath", action="store_true", help="Disable AOI spatial filter and ingest all tiles across the full scene swath")
     args = parser.parse_args()
 
     if args.clean:
         reset_storage_and_indexes()
     else:
         init_db()
+
+    # Determine AOI filter configuration
+    use_aoi_filter = not args.full_swath
+    aoi_bounds = tuple(args.aoi) if args.aoi else None
 
     if args.file:
         targets = [Path(args.file)]
@@ -104,13 +110,14 @@ def main():
         print("No new files to ingest in data/incoming/.")
         return
 
-    print(f"Ingesting {len(targets)} scene(s) into TerreX...\n")
+    aoi_desc = "Full Swath (no filter)" if args.full_swath else (f"Custom AOI {aoi_bounds}" if aoi_bounds else f"Greater Kolkata AOI [{settings.INGEST_AOI_MIN_LON}, {settings.INGEST_AOI_MIN_LAT}, {settings.INGEST_AOI_MAX_LON}, {settings.INGEST_AOI_MAX_LAT}]")
+    print(f"Ingesting {len(targets)} scene(s) into TerreX (Spatial Mode: {aoi_desc})...\n")
     processed_count = 0
     total_tiles = 0
 
     for path in targets:
         try:
-            result = ingest_file(path)
+            result = ingest_file(path, aoi_bounds=aoi_bounds, use_aoi_filter=use_aoi_filter)
             tiles = result.get("created_tiles", result.get("tiles", 0))
             total_tiles += tiles
             processed_count += 1
