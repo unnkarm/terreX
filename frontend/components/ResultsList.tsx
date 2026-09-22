@@ -10,6 +10,7 @@ interface Props {
   onInspect?: (r: SearchResult) => void;
   onFindSimilar?: (r: SearchResult) => void;
   placeholderWarning?: boolean;
+  temporalQuery?: boolean;
 }
 
 export default function ResultsList({
@@ -19,6 +20,7 @@ export default function ResultsList({
   onInspect,
   onFindSimilar,
   placeholderWarning,
+  temporalQuery,
 }: Props) {
   return (
     <div className="flex flex-col bg-neutral-950 font-mono text-xs">
@@ -47,9 +49,13 @@ export default function ResultsList({
             <svg className="w-8 h-8 text-neutral-700 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
-            <p className="font-bold text-neutral-400 uppercase tracking-wider">AWAITING QUERY INPUT...</p>
+            <p className="font-bold text-neutral-400 uppercase tracking-wider">
+              {temporalQuery ? "NO CHANGE-SUPPORTED CANDIDATES" : "AWAITING QUERY INPUT..."}
+            </p>
             <p className="text-[10px] text-neutral-600 font-sans">
-              Enter a search description or select a suggested intent above to search vector embeddings.
+              {temporalQuery
+                ? "Static visual matches were excluded because the temporal evidence did not confirm physical change."
+                : "Enter a search description or select a suggested intent above to search vector embeddings."}
             </p>
           </div>
         )}
@@ -57,6 +63,8 @@ export default function ResultsList({
         {results.map((r, idx) => {
           const isSelected = r.tile_id === selectedTileId;
           const simPct = Math.round(r.similarity_score * 100);
+          const rankPct = Math.round(r.final_score * 100);
+          const changePct = r.change_score == null ? null : Math.round(r.change_score * 100);
           const qualityPct = r.quality_score == null ? null : Math.round(r.quality_score * 100);
           const cloudPct = r.cloud_fraction == null ? null : Math.round(r.cloud_fraction * 100);
           const title = r.classification_label || (r.location_name ? `${r.location_name.toUpperCase()} REGION` : "CANDIDATE TARGET");
@@ -82,11 +90,11 @@ export default function ResultsList({
                     #{String(idx + 1).padStart(2, "0")}
                   </span>
                   <span className="text-[9px] uppercase tracking-wider font-bold text-neutral-300">
-                    {simPct >= 90 ? "HIGH RELEVANCE" : simPct >= 75 ? "ELEVATED" : "MODERATE"}
+                    {rankPct >= 75 ? "HIGH RELEVANCE" : rankPct >= 50 ? "ELEVATED" : "MODERATE"}
                   </span>
                 </div>
                 <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/40 px-1.5 py-0.2 rounded border border-emerald-800/50">
-                  {simPct}% MATCH
+                  {rankPct}% {changePct == null ? "RANK" : "CHANGE-AWARE"}
                 </span>
               </div>
 
@@ -130,6 +138,10 @@ export default function ResultsList({
                     <span className="text-neutral-500">QUALITY:</span>
                     <span className="text-neutral-300 font-bold">{qualityPct == null ? "N/A" : `${qualityPct}%`}</span>
                   </div>
+                  {changePct != null && <div className="flex justify-between col-span-2 py-1 border-y border-neutral-800/50">
+                    <span className="text-neutral-500">TEMPORAL CHANGE:</span>
+                    <span className={`font-bold ${changePct >= 50 ? "text-emerald-400" : "text-amber-400"}`}>{changePct}% EVIDENCE</span>
+                  </div>}
                   <div className="flex justify-between">
                     <span className="text-neutral-500">CLOUD:</span>
                     <span className="text-neutral-300 font-bold">{cloudPct == null ? "N/A" : `${cloudPct}%`}</span>

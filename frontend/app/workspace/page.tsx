@@ -9,6 +9,7 @@ import FilterBar from "@/components/FilterBar";
 import ResultsList from "@/components/ResultsList";
 import ResultDetail from "@/components/ResultDetail";
 import ExportModal from "@/components/ExportModal";
+import SettingsModal, { AnalysisSettings, DEFAULT_ANALYSIS_SETTINGS } from "@/components/SettingsModal";
 import {
   searchByText, searchByImage, getSystemStatus, listScenes,
   getDiscoveryClusters,
@@ -41,6 +42,18 @@ export default function WorkspacePage() {
   const [isLeftOpen, setIsLeftOpen] = useState(true);
   const [isRightOpen, setIsRightOpen] = useState(true);
   const [isExportOpen, setIsExportOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [analysisSettings, setAnalysisSettings] = useState<AnalysisSettings>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = window.localStorage.getItem("terrex.changeAnalysisSettings");
+        if (saved) return { ...DEFAULT_ANALYSIS_SETTINGS, ...JSON.parse(saved) };
+      } catch {
+        /* fallback */
+      }
+    }
+    return DEFAULT_ANALYSIS_SETTINGS;
+  });
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [isDrawingAoi, setIsDrawingAoi] = useState(false);
 
@@ -164,6 +177,8 @@ export default function WorkspacePage() {
       if (res.results.length > 0) {
         setSelected(res.results[0]);
         setIsRightOpen(true);
+      } else {
+        setSelected(null);
       }
     } catch (err: any) {
       setSearchError(err?.message || "Search failed. Offline demo resilience active.");
@@ -262,15 +277,42 @@ export default function WorkspacePage() {
     );
   }, [targetAois, center]);
 
-  const activePortalSources = useMemo(() => {
-    const portals = Array.from(new Set(scenes.map((s) => s.source_portal).filter(Boolean)));
-    return portals.length > 0 ? portals.join(" · ") : "COPERNICUS · USGS · ISRO BHUVAN";
-  }, [scenes]);
+  const filteredResults = useMemo(() => {
+    let list = [...results];
+    if (filters.minChangeEvidence !== undefined && filters.minChangeEvidence > 0) {
+      list = list.filter((r) => (r.change_score ?? 0) >= (filters.minChangeEvidence ?? 0));
+    }
+
+    const sortOrder = filters.sortBy ?? (parsedFilters?.temporal_change_intent ? "change" : "rank");
+    list.sort((a, b) => {
+      if (sortOrder === "change") {
+        const ca = a.change_score ?? 0;
+        const cb = b.change_score ?? 0;
+        if (cb !== ca) return cb - ca;
+        return b.final_score - a.final_score;
+      }
+      if (sortOrder === "similarity") {
+        return b.similarity_score - a.similarity_score;
+      }
+      if (sortOrder === "date") {
+        const da = a.acquisition_date ? new Date(a.acquisition_date).getTime() : 0;
+        const db = b.acquisition_date ? new Date(b.acquisition_date).getTime() : 0;
+        return db - da;
+      }
+      return b.final_score - a.final_score;
+    });
+
+    return list;
+  }, [results, filters.minChangeEvidence, filters.sortBy, parsedFilters?.temporal_change_intent]);
 
   return (
     <main className="h-screen w-screen flex flex-col bg-black font-sans relative overflow-hidden select-none">
       {/* Top Navigation Bar */}
-      <TopNav status={status} onExportClick={() => setIsExportOpen(true)} />
+      <TopNav
+        status={status}
+        onExportClick={() => setIsExportOpen(true)}
+        onSettingsClick={() => setIsSettingsOpen(true)}
+      />
 
       {/* Empty State Warning if vector index has no data */}
       {hasData === false && (
@@ -403,7 +445,7 @@ export default function WorkspacePage() {
             {/* 3. Ranked Candidate Results Queue */}
             <div className="flex-none rounded border border-neutral-800/80 overflow-hidden">
               <ResultsList
-                results={results}
+                results={filteredResults}
                 selectedTileId={selected?.tile_id ?? null}
                 onSelect={(r) => {
                   setSelected(r);
@@ -416,6 +458,7 @@ export default function WorkspacePage() {
                   setIsRightOpen(true);
                 }}
                 placeholderWarning={placeholderWarning}
+                temporalQuery={Boolean(parsedFilters?.temporal_change_intent)}
               />
             </div>
           </div>
@@ -434,7 +477,7 @@ export default function WorkspacePage() {
         {/* CENTER COLUMN: Full Map View with AOI Tools */}
         <div className="flex-1 h-full relative z-10">
           <MapView
-            results={results}
+            results={filteredResults}
             selectedTileId={selected?.tile_id ?? null}
             onSelect={(r) => {
               setSelected(r);
@@ -479,6 +522,7 @@ export default function WorkspacePage() {
                 const cited = results.find((item) => item.tile_id === citationId);
                 if (cited) setSelected(cited);
               }}
+              analysisSettings={analysisSettings}
             />
             {discoveryLoading && (
               <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-neutral-900 border border-cyan-700/60 text-cyan-400 font-mono text-[10px] rounded shadow-lg z-50 flex items-center gap-2">
@@ -497,6 +541,16 @@ export default function WorkspacePage() {
         allResults={results}
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
+      />
+
+      {/* Global Analysis Thresholds Modal */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        settings={analysisSettings}
+        onSave={(newSettings) => {
+          setAnalysisSettings(newSettings);
+        }}
       />
     </main>
   );

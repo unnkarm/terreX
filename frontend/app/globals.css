@@ -82,3 +82,47 @@ input[type="range"].slider-divider::-webkit-slider-thumb {
   box-shadow: 0 0 12px rgba(6, 182, 212, 0.6);
 }
 
+/* Compact tactical scrubber used by the acquisition timeline. */
+input[type="range"].timeline-scrubber {
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: #262626;
+  cursor: ew-resize;
+  outline: none;
+}
+input[type="range"].timeline-scrubber::-webkit-slider-thumb {
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #34d399;
+  border: 2px solid #052e24;
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.14);
+}
+input[type="range"].timeline-scrubber::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #34d399;
+  border: 2px solid #052e24;
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.14);
+}
+
+.timeline-axis-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #404040 #0a0a0a;
+  scroll-snap-type: x proximity;
+}
+.timeline-axis-scroll::-webkit-scrollbar {
+  height: 4px;
+}
+.timeline-axis-scroll::-webkit-scrollbar-track {
+  background: #0a0a0a;
+  border: 0;
+}
+.timeline-axis-scroll::-webkit-scrollbar-thumb {
+  background: #404040;
+  border: 0;
+  border-radius: 999px;
+}

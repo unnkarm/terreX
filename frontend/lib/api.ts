@@ -12,6 +12,8 @@ export interface SearchResult {
   similarity_score: number;
   final_score: number;
   score_breakdown: Record<string, unknown>;
+  change_score?: number | null;
+  change_evidence?: Record<string, unknown> | null;
   acquisition_date: string | null;
   sensor: string | null;
   quality_score: number | null;
@@ -19,6 +21,7 @@ export interface SearchResult {
   cloud_cover_pct?: number | null;
   thumbnail_path: string | null;
   embedding_model: string | null;
+  embedding_model_version?: string | null;
   embedding_is_placeholder: boolean;
   classification_label?: string;
   location_name?: string;
@@ -43,6 +46,8 @@ export interface ParsedFilters {
   max_cloud_cover?: number | null;
   sensor?: string | null;
   explanation?: string[];
+  temporal_change_intent?: boolean;
+  temporal_keywords?: string[];
 }
 
 export interface TextSearchResponse {
@@ -50,6 +55,9 @@ export interface TextSearchResponse {
   effective_semantic_query?: string;
   embedding_model: string;
   embedding_is_placeholder: boolean;
+  temporal_query?: boolean;
+  temporal_keywords?: string[];
+  ranking_mode?: "hybrid" | "change-aware";
   parsed_filters?: ParsedFilters;
   results: SearchResult[];
   target_location?: {
@@ -76,6 +84,10 @@ export interface ChangeObservation {
   mean_ndwi: number | null;
   mean_ndbi: number | null;
   modality?: "optical" | "sar";
+  lon?: number;
+  lat?: number;
+  resolution_m?: number | null;
+  tile_size?: number | null;
   is_valid?: boolean;
   valid_pixel_fraction?: number;
   change_signal?: number;
@@ -150,6 +162,9 @@ export interface ChangeRegionItem {
 export interface ChangeDetectionResponse {
   status: string;
   is_fallback?: boolean;
+  analysis_mode?: "dense" | "bi-temporal" | "nearest-available";
+  fallback_reason?: string;
+  available_dates?: string[];
   result_source?: "backend";
   message?: string;
   change_id?: string;
@@ -206,6 +221,12 @@ export interface ChangeDetectionResponse {
   reasons?: string[];
   method?: string;
   is_placeholder_model?: boolean;
+}
+
+export interface AcquisitionCatalog {
+  count: number;
+  available_dates: string[];
+  observations: ChangeObservation[];
 }
 
 export interface SystemStatus {
@@ -280,6 +301,8 @@ export interface FilterState {
   dateFrom?: string;
   dateTo?: string;
   minSimilarity?: number;
+  minChangeEvidence?: number;
+  sortBy?: "change" | "rank" | "similarity" | "date";
   bbox?: [number, number, number, number];
   polygon?: [number, number][] | any;
   maxCloudCover?: number;
@@ -416,15 +439,37 @@ export async function getReviewQueue(status?: ReviewQueueItem["status"], limit =
   return res.json();
 }
 
-export async function detectChange(lon: number, lat: number, dateFrom: string, dateTo: string, tileId?: string): Promise<ChangeDetectionResponse> {
+export interface ChangeAnalysisOptions {
+  baselineN?: number;
+  persistenceK?: number;
+  temporalThreshold?: number;
+  changeProbabilityThreshold?: number;
+  changeMapThreshold?: number;
+}
+
+export async function detectChange(
+  lon: number, lat: number, dateFrom: string, dateTo: string, tileId?: string,
+  options: ChangeAnalysisOptions = {},
+): Promise<ChangeDetectionResponse> {
   const params = new URLSearchParams({ lon: String(lon), lat: String(lat), date_from: dateFrom, date_to: dateTo });
   if (tileId) params.set("tile_id", tileId);
-  params.set("baseline_n", "3");
-  params.set("persistence_k", "2");
+  params.set("baseline_n", String(options.baselineN ?? 3));
+  params.set("persistence_k", String(options.persistenceK ?? 2));
+  params.set("threshold", String(options.temporalThreshold ?? 0.18));
+  params.set("change_prob_threshold", String(options.changeProbabilityThreshold ?? 0.5));
+  params.set("change_map_threshold", String(options.changeMapThreshold ?? 0.2));
   const res = await fetch(`${API_BASE}/api/change/detect?${params.toString()}`);
   if (res.ok) return res.json();
   const errData = await res.json().catch(() => ({}));
   return { status: "error", message: errData.detail || `Change detection failed (${res.status})` };
+}
+
+export async function getAvailableAcquisitions(lon: number, lat: number, tileId?: string): Promise<AcquisitionCatalog> {
+  const params = new URLSearchParams({ lon: String(lon), lat: String(lat) });
+  if (tileId) params.set("tile_id", tileId);
+  const res = await fetch(`${API_BASE}/api/change/acquisitions?${params.toString()}`);
+  if (!res.ok) throw new Error(`Acquisition catalog failed (${res.status})`);
+  return res.json();
 }
 
 export async function submitFeedback(targetType: string, targetId: string, verdict: "confirm" | "reject", note?: string, analyst?: string) {

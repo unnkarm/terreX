@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import {
-  SearchResult, ChangeDetectionResponse, detectChange, submitFeedback,
+  SearchResult, ChangeDetectionResponse, ChangeObservation, detectChange, getAvailableAcquisitions, submitFeedback,
 } from "@/lib/api";
 import BeforeAfterSlider from "@/components/BeforeAfterSlider";
 import ChangeTimeline from "@/components/ChangeTimeline";
@@ -10,12 +10,14 @@ import EvidencePanel from "@/components/EvidencePanel";
 import ProvenanceDrawer from "@/components/ProvenanceDrawer";
 import ExportModal from "@/components/ExportModal";
 import ChatPanel from "./ChatPanel";
+import { AnalysisSettings, DEFAULT_ANALYSIS_SETTINGS } from "@/components/SettingsModal";
 
 interface Props {
   result: SearchResult | null;
   onClose: () => void;
   onFindSimilar?: (result: SearchResult) => void;
   onCitationClick?: (citationId: string) => void;
+  analysisSettings?: AnalysisSettings;
 }
 
 type TabKey = "overview" | "change" | "spectral" | "evidence" | "timeline" | "decision" | "ai" | "all";
@@ -38,7 +40,13 @@ function computeSmartDates(targetDateStr?: string | null): { from: string; to: s
   return { from: "2024-04-01", to: "2026-04-01" };
 }
 
-export default function ResultDetail({ result, onClose, onFindSimilar, onCitationClick }: Props) {
+export default function ResultDetail({
+  result,
+  onClose,
+  onFindSimilar,
+  onCitationClick,
+  analysisSettings = DEFAULT_ANALYSIS_SETTINGS,
+}: Props) {
   const [activeTab, setActiveTab] = useState<TabKey>("change");
 
   // Proper bounded bitemporal dates within satellite archive timeframe
@@ -47,6 +55,8 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
   const [activePreset, setActivePreset] = useState<string>("full");
 
   const [change, setChange] = useState<ChangeDetectionResponse | null>(null);
+  const [availableObservations, setAvailableObservations] = useState<ChangeObservation[]>([]);
+  const [activeObservation, setActiveObservation] = useState<ChangeObservation | null>(null);
   const [loading, setLoading] = useState(false);
   const [feedbackSent, setFeedbackSent] = useState<string | null>(null);
   const [analystNote, setAnalystNote] = useState("");
@@ -74,7 +84,27 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
     setDateFrom(smart.from);
     setDateTo(smart.to);
     setActivePreset("full");
-  }, [result?.tile_id]);
+    setAvailableObservations([]);
+    setActiveObservation(null);
+    let cancelled = false;
+    getAvailableAcquisitions(result.lon, result.lat, result.tile_id).then((catalog) => {
+      if (cancelled) return;
+      setAvailableObservations(catalog.observations);
+      if (catalog.available_dates.length) {
+        setDateFrom(catalog.available_dates[0]);
+        setDateTo(catalog.available_dates[catalog.available_dates.length - 1]);
+        setActivePreset("actual");
+      }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [result?.tile_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+
+
+  const selectTemporalFrame = React.useCallback((_date: string, observation?: ChangeObservation) => {
+    const frame = observation ?? null;
+    setActiveObservation(frame);
+  }, []);
 
   if (!result) {
     return (
@@ -117,7 +147,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
     setLoading(true);
     setFeedbackSent(null);
     try {
-      const res = await detectChange(result.lon, result.lat, dateFrom, dateTo, result.tile_id);
+      const res = await detectChange(result.lon, result.lat, dateFrom, dateTo, result.tile_id, analysisSettings);
       setChange(res);
       if (res.change_regions && res.change_regions.length > 0) {
         setSelectedRegionId(res.change_regions[0].region_id);
@@ -128,6 +158,8 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
       setLoading(false);
     }
   };
+
+
 
   const sendFeedback = async (verdict: "confirm" | "reject") => {
     if (!change?.change_id) return;
@@ -173,16 +205,6 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
       badge: change?.change_regions?.length ? change.change_regions.length : undefined,
     },
     {
-      key: "evidence",
-      label: "Explainable XAI",
-      icon: (
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-        </svg>
-      ),
-      badge: changeReady && change?.confidence != null ? `${Math.round(change.confidence * 100)}%` : undefined,
-    },
-    {
       key: "timeline",
       label: "Multi-Temporal Timeline",
       icon: (
@@ -193,14 +215,14 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
       badge: change?.observations?.length ? change.observations.length : undefined,
     },
     {
-      key: "decision",
-      label: "Verification & Decision",
+      key: "evidence",
+      label: "Explainable XAI",
       icon: (
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
         </svg>
       ),
-      badge: feedbackSent ? feedbackSent.toUpperCase() : undefined,
+      badge: changeReady && change?.confidence != null ? `${Math.round(change.confidence * 100)}%` : undefined,
     },
     {
       key: "ai",
@@ -210,6 +232,16 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
         </svg>
       ),
+    },
+    {
+      key: "decision",
+      label: "Verification & Decision",
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      ),
+      badge: feedbackSent ? feedbackSent.toUpperCase() : undefined,
     },
     {
       key: "all",
@@ -338,7 +370,7 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
               <div className="bg-neutral-900/60 border border-neutral-800/80 rounded p-3 space-y-3">
                 <div className="flex items-center justify-between text-[10px] font-mono text-neutral-400">
                   <span className="uppercase tracking-wider font-bold text-neutral-300">TEMPORAL OBSERVATION WINDOW</span>
-                  <span className="text-amber-400 font-medium">ARCHIVE: APR 2024 &ndash; MAR 2026</span>
+                  <span className="text-amber-400 font-medium">{availableObservations.length} ACQUISITIONS</span>
                 </div>
 
                 {/* Date Input Pickers with Realistic Bounds */}
@@ -425,6 +457,46 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                   </button>
                 </div>
 
+                {/* Compact acquisition catalog — expanded only when requested */}
+                <details className="group overflow-hidden rounded border border-neutral-800 bg-neutral-950/70 font-mono">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-2.5 py-2 text-[9px] uppercase tracking-wider text-neutral-400 transition-colors hover:bg-neutral-900/70 hover:text-neutral-200 [&::-webkit-details-marker]:hidden">
+                    <span className="flex min-w-0 items-center gap-2 font-bold">
+                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded border border-cyan-900/70 bg-cyan-950/30 text-cyan-400">◫</span>
+                      <span>Acquisition catalog</span>
+                    </span>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-[8px] text-neutral-500">
+                        {availableObservations.length
+                          ? `${availableObservations[0].date_formatted} → ${availableObservations[availableObservations.length - 1].date_formatted}`
+                          : "Loading dates…"}
+                      </span>
+                      <span className="text-cyan-500 transition-transform group-open:rotate-180">⌄</span>
+                    </span>
+                  </summary>
+                  <div className="border-t border-neutral-800 px-2.5 py-2.5">
+                    {availableObservations.length ? (
+                      <div className="grid max-h-28 grid-cols-3 gap-1.5 overflow-y-auto pr-1">
+                        {availableObservations.map((item) => (
+                          <span
+                            key={`${item.tile_id}-${item.acquisition_date}`}
+                            className="flex items-center gap-1.5 rounded border border-neutral-800 bg-black/60 px-2 py-1.5 text-[8px] text-neutral-300"
+                            title={`${item.modality === "sar" ? "Radar" : "Optical"} acquisition`}
+                          >
+                            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${item.modality === "sar" ? "bg-fuchsia-400" : "bg-cyan-400"}`} />
+                            <span>{item.date_formatted}</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="py-2 text-center text-[9px] text-neutral-600">Loading actual acquisition dates…</div>
+                    )}
+                    <div className="mt-2 flex items-center gap-3 border-t border-neutral-900 pt-2 text-[8px] uppercase tracking-wider text-neutral-600">
+                      <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-cyan-400" /> Optical</span>
+                      <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-fuchsia-400" /> Radar</span>
+                    </div>
+                  </div>
+                </details>
+
                 {/* Primary Action: Run dense time-series change analysis */}
                 <button
                   onClick={runChangeDetection}
@@ -459,10 +531,11 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
               )}
 
               {change && change.status === "insufficient_data" && (
-                <div className="p-3 rounded bg-amber-950/40 border border-amber-800/60 text-amber-400 font-mono text-[11px]">
+                <div className="p-3 rounded bg-cyan-950/30 border border-cyan-800/60 text-cyan-300 font-mono text-[11px]">
                   {change.message}
                 </div>
               )}
+
 
               {change && (change.status === "no_change" || change.status === "transient_only") && (
                 <div className="p-3 rounded bg-cyan-950/30 border border-cyan-800/60 text-cyan-300 font-mono text-[11px] space-y-1">
@@ -492,11 +565,11 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                       change.before?.thumbnail_url ?? change.before?.thumbnail_path ?? result.thumbnail_path ?? result.tile_id
                     }
                     afterImg={
-                      change.after?.thumbnail_url ?? change.after?.thumbnail_path ?? result.thumbnail_path ?? result.tile_id
+                      activeObservation?.thumbnail_url ?? change.after?.thumbnail_url ?? change.after?.thumbnail_path ?? result.thumbnail_path ?? result.tile_id
                     }
                     maskImg={change.change_mask_url}
                     beforeDate={change.before?.acquisition_date?.slice(0, 10) ?? dateFrom}
-                    afterDate={change.after?.acquisition_date?.slice(0, 10) ?? dateTo}
+                    afterDate={activeObservation?.date_formatted ?? change.after?.acquisition_date?.slice(0, 10) ?? dateTo}
                     dominantChange={change.dominant_change_type}
                     confidence={change.confidence}
                     activeLayers={activeLayers}
@@ -593,6 +666,8 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
                 />
               </div>
 
+
+
               {/* Connected Component Change Regions */}
               {changeReady && change.change_regions && change.change_regions.length > 0 && (
                 <div className="space-y-2 pt-2 border-t border-neutral-800/80">
@@ -647,14 +722,45 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
               )}
 
               {!changeReady && (
-                <div className="p-3 rounded bg-neutral-900/40 border border-neutral-800 text-neutral-500 font-mono text-[10px] text-center">
-                  Spectral deltas and connected regions will appear after a persisted change is confirmed.
+                <div className="p-4 rounded bg-neutral-900/40 border border-neutral-800 text-neutral-500 font-mono text-[10px] text-center space-y-2.5">
+                  <p>Spectral deltas and connected regions will appear after change-point analysis is executed.</p>
+                  <button
+                    type="button"
+                    onClick={runChangeDetection}
+                    disabled={loading}
+                    className="px-3 py-1.5 rounded bg-cyan-950/60 border border-cyan-700/80 text-cyan-300 hover:bg-cyan-900/70 text-[10px] uppercase font-bold tracking-wider transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
+                  >
+                    {loading ? (
+                      <>
+                        <span className="w-2.5 h-2.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                        <span>PROCESSING TIME-SERIES...</span>
+                      </>
+                    ) : (
+                      "RUN CHANGE ANALYSIS NOW"
+                    )}
+                  </button>
                 </div>
               )}
             </div>
           )}
 
-          {/* TAB 4: EXPLAINABLE XAI EVIDENCE */}
+          {/* TAB 4: MULTI-TEMPORAL TIMELINE */}
+          {(activeTab === "timeline" || activeTab === "all") && (
+            <div className="space-y-3 animate-fadeIn">
+              <SectionHeader title="MULTI-TEMPORAL OBSERVATION TIMELINE" badge="TIME SERIES" />
+              <ChangeTimeline
+                onSelectDate={selectTemporalFrame}
+                earliestDate={change?.earliest_supported_observation?.slice(0, 10)}
+                confirmedDate={change?.confirmed_observation?.slice(0, 10)}
+                uncertaintyDays={change?.temporal_uncertainty_days}
+                persistenceStatus={change?.persistence?.status ?? change?.status}
+                registrationConfidence={change?.registration?.correlation_after != null ? Math.round(change.registration.correlation_after * 100) : undefined}
+                observations={change?.observations?.length ? change.observations : availableObservations}
+              />
+            </div>
+          )}
+
+          {/* TAB 5: EXPLAINABLE XAI EVIDENCE */}
           {(activeTab === "evidence" || activeTab === "all") && (
             <div className="space-y-3 animate-fadeIn">
               <SectionHeader title="EXPLAINABLE AI (XAI) EVIDENCE" badge="AUDIT LOG" />
@@ -672,22 +778,34 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
             </div>
           )}
 
-          {/* TAB 5: MULTI-TEMPORAL TIMELINE */}
-          {(activeTab === "timeline" || activeTab === "all") && (
-            <div className="space-y-3 animate-fadeIn">
-              <SectionHeader title="MULTI-TEMPORAL OBSERVATION TIMELINE" badge="TIME SERIES" />
-              <ChangeTimeline
-                earliestDate={change?.earliest_supported_observation?.slice(0, 10)}
-                confirmedDate={change?.confirmed_observation?.slice(0, 10)}
-                uncertaintyDays={change?.temporal_uncertainty_days}
-                persistenceStatus={change?.persistence?.status ?? change?.status}
-                registrationConfidence={change?.registration?.correlation_after != null ? Math.round(change.registration.correlation_after * 100) : undefined}
-                observations={change?.observations}
-              />
+          {/* TAB 6: TERRA ASSISTANT */}
+          {(activeTab === "ai" || activeTab === "all") && (
+            <div className="space-y-2.5 animate-fadeIn flex flex-col">
+              <SectionHeader title="TERRA ASSISTANT" badge="GROUNDED INTELLIGENCE" />
+
+              {/* Embedded Terra Interface */}
+              <div className="flex-1 min-h-[460px]">
+                <ChatPanel
+                  context={{
+                    tile_id: result.tile_id,
+                    change_id: change?.change_id,
+                  }}
+                  fallbackData={{
+                    changeType: change?.dominant_change_type,
+                    confidence: change?.confidence,
+                    date1: dateFrom,
+                    date2: dateTo,
+                    maskState: change?.quality_score?.toString(),
+                    sceneId: result.scene_id,
+                    sensor: result.sensor || undefined,
+                  }}
+                  onCitationClick={onCitationClick}
+                />
+              </div>
             </div>
           )}
 
-          {/* TAB 6: VERIFICATION & DECISION LOGGING */}
+          {/* TAB 7: VERIFICATION & DECISION LOGGING */}
           {(activeTab === "decision" || activeTab === "all") && (
             <div className="space-y-3 animate-fadeIn">
               <SectionHeader title="ANALYST VERIFICATION & DECISION" badge="CONFIRM / REJECT" />
@@ -763,33 +881,6 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
               </button>
             </div>
           )}
-
-          {/* TAB: TERRA ASSISTANT */}
-          {(activeTab === "ai" || activeTab === "all") && (
-            <div className="space-y-2.5 animate-fadeIn flex flex-col">
-              <SectionHeader title="TERRA ASSISTANT" badge="GROUNDED INTELLIGENCE" />
-
-              {/* Embedded Terra Interface */}
-              <div className="flex-1 min-h-[460px]">
-                <ChatPanel
-                  context={{
-                    tile_id: result.tile_id,
-                    change_id: change?.change_id,
-                  }}
-                  fallbackData={{
-                    changeType: change?.dominant_change_type,
-                    confidence: change?.confidence,
-                    date1: dateFrom,
-                    date2: dateTo,
-                    maskState: change?.quality_score?.toString(),
-                    sceneId: result.scene_id,
-                    sensor: result.sensor || undefined,
-                  }}
-                  onCitationClick={onCitationClick}
-                />
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Vertical Icon Dock (Right Side) */}
@@ -851,6 +942,8 @@ export default function ResultDetail({ result, onClose, onFindSimilar, onCitatio
     </div>
   );
 }
+
+
 
 function SectionHeader({ title, badge }: { title: string; badge?: string }) {
   return (

@@ -115,8 +115,64 @@ export default function FilterBar({
             </div>
           </div>
 
-          {/* Quality & Cloud Cover Sliders */}
-          <div className="grid grid-cols-2 gap-3 pt-1">
+          {/* Sorting & Change Range Presets */}
+          <div className="space-y-2 pt-1 border-t border-neutral-800/60">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[9px] uppercase tracking-wider text-neutral-400 font-bold">
+                CANDIDATE SORT ORDER
+              </span>
+              <select
+                value={filters.sortBy ?? "change"}
+                onChange={(e) => onChange({ ...filters, sortBy: e.target.value as any })}
+                className="bg-black border border-neutral-700 text-cyan-300 rounded px-2 py-1 text-[10px] uppercase outline-none cursor-pointer"
+              >
+                <option value="change">Change Evidence ↓</option>
+                <option value="rank">Hybrid Score ↓</option>
+                <option value="similarity">Similarity ↓</option>
+                <option value="date">Acquisition Date ↓</option>
+              </select>
+            </div>
+
+            {/* Quick Change Evidence Filter Chips */}
+            <div className="flex items-center gap-1.5 pt-0.5">
+              <button
+                type="button"
+                onClick={() => onChange({ ...filters, minChangeEvidence: undefined })}
+                className={`px-2 py-0.5 rounded text-[9px] uppercase tracking-wider font-bold transition-all border ${
+                  filters.minChangeEvidence === undefined || filters.minChangeEvidence === 0
+                    ? "bg-cyan-950/60 border-cyan-500 text-cyan-300"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-400 hover:border-neutral-700"
+                }`}
+              >
+                All Targets
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange({ ...filters, minChangeEvidence: 0.01 })}
+                className={`px-2 py-0.5 rounded text-[9px] uppercase tracking-wider font-bold transition-all border ${
+                  filters.minChangeEvidence === 0.01
+                    ? "bg-amber-950/60 border-amber-500 text-amber-300"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-400 hover:border-neutral-700"
+                }`}
+              >
+                Change &gt;0%
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange({ ...filters, minChangeEvidence: 0.15 })}
+                className={`px-2 py-0.5 rounded text-[9px] uppercase tracking-wider font-bold transition-all border ${
+                  filters.minChangeEvidence === 0.15
+                    ? "bg-emerald-950/60 border-emerald-500 text-emerald-300"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-400 hover:border-neutral-700"
+                }`}
+              >
+                High &ge;15%
+              </button>
+            </div>
+          </div>
+
+          {/* Quality, Cloud Cover & Change Evidence Sliders */}
+          <div className="grid grid-cols-3 gap-2.5 pt-1">
             <div>
               <div className="flex justify-between text-[10px] font-mono text-neutral-400 mb-1">
                 <span>MAX CLOUD</span>
@@ -150,6 +206,26 @@ export default function FilterBar({
                 value={filters.minSimilarity ?? 0}
                 onChange={(e) => onChange({ ...filters, minSimilarity: parseFloat(e.target.value) })}
                 className="w-full accent-emerald-400 h-1 bg-neutral-800 rounded appearance-none cursor-pointer"
+              />
+            </div>
+            <div>
+              <div className="flex justify-between text-[10px] font-mono text-neutral-400 mb-1">
+                <span>MIN CHANGE</span>
+                <span className="text-amber-400 font-bold">
+                  {filters.minChangeEvidence !== undefined ? `${Math.round(filters.minChangeEvidence * 100)}%` : "ALL"}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={filters.minChangeEvidence ?? 0}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  onChange({ ...filters, minChangeEvidence: val <= 0 ? undefined : val });
+                }}
+                className="w-full accent-amber-400 h-1 bg-neutral-800 rounded appearance-none cursor-pointer"
               />
             </div>
           </div>
